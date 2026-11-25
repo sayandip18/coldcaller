@@ -1,0 +1,19 @@
+node_modules/
+apps/web/dist/
+apps/web/.env*
+*.local
+
+# Python / FastAPI
+apps/api/.venv/
+apps/api/__pycache__/
+apps/api/*.egg-info/
+apps/api/.env*
+.pytest_cache/
+.ruff_cache/
+
+# OS / Editors
+.DS_Store
+# Env / caches
+.env
+__pycache__/
+*.pyc

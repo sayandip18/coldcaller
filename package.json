@@ -1,0 +1,14 @@
+{
+  "name": "coldcaller",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c blue,green \"pnpm dev:api\" \"pnpm dev:web\"",
+    "dev:api": "uv run --directory apps/api fastapi dev app/main.py",
+    "dev:web": "pnpm --dir apps/web dev",
+    "install:all": "pnpm install && pnpm --dir apps/web install && uv sync --directory apps/api",
+    "lint": "uv run --directory apps/api ruff check . && pnpm --dir apps/web exec tsc --noEmit"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
