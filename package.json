@@ -6,7 +6,12 @@
     "dev:api": "uv run --directory apps/api fastapi dev app/main.py",
     "dev:web": "pnpm --dir apps/web dev",
     "install:all": "pnpm install && pnpm --dir apps/web install && uv sync --directory apps/api",
-    "lint": "uv run --directory apps/api ruff check . && pnpm --dir apps/web exec tsc --noEmit"
+    "lint": "uv run --directory apps/api ruff check . && pnpm --dir apps/web exec tsc --noEmit && pnpm --dir apps/web lint",
+    "infra:up": "docker compose -f infra/docker-compose.yml up -d --wait",
+    "infra:down": "docker compose -f infra/docker-compose.yml down",
+    "db:migrate": "uv run --directory apps/api alembic upgrade head",
+    "create-admin": "uv run --directory apps/api python -m app.cli create-admin",
+    "test:api": "uv run --directory apps/api pytest -q"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"
