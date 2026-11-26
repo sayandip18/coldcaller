@@ -31,6 +31,7 @@ export type Call = {
   contact_name: string
   custom_fields: Record<string, string>
   script_prompt: string | null
+  is_test: boolean
   status: string
   attempt: number
   outcome: Record<string, unknown> | null

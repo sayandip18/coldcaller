@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     livekit_url: str = "ws://localhost:7880"
     livekit_api_key: str = "devkey"
     livekit_api_secret: str = "devsecret-devsecret-devsecret-devsecret"
+    # LiveKit address the *browser* connects to (test calls). Empty = same as livekit_url.
+    livekit_public_url: str = ""
     livekit_sip_trunk_id: str = ""
     livekit_agent_name: str = "coldcaller-agent"
     livekit_ring_timeout: int = 40  # seconds the customer's phone may ring
@@ -70,6 +72,10 @@ class Settings(BaseSettings):
     fake_talk_min: float = 3.0
     fake_talk_max: float = 10.0
 
+
+    @property
+    def livekit_browser_url(self) -> str:
+        return self.livekit_public_url or self.livekit_url
 
     @property
     def livekit_http_url(self) -> str:

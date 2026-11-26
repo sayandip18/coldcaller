@@ -301,17 +301,28 @@ def test_a_slow_campaign_does_not_hold_up_another(member):
 
 def test_call_lost_between_pop_and_dial_is_recovered(member):
     """Worker popped a call (slot reserved) and died before marking it dialing."""
+    from app.queue.primitives import CampaignQueues
+
     call = member.post("/api/calls", json={"to_number": "9876500001", "script_prompt": "hi"}).json()
 
+    async def crash():
+        # Build the crashed state *before* any worker runs, so nothing races with it.
+        r = Redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
+        try:
+            await r.delete(keys.STREAM)  # drop the normal enqueue
+            cq = CampaignQueues(r, carrier_cps=100_000, global_max=100, lease_seconds=60)
+            await cq.push(keys.SINGLE, [call["id"]])
+            _code, popped = await cq.claim_next(keys.SINGLE, None, None)
+            assert popped == call["id"] and await r.zcard(keys.GLOBAL_CHANNELS) == 1
+            await r.zadd(keys.HANDOFF, {call["id"]: 0})  # its handoff deadline has passed
+        finally:
+            await r.aclose()
+
+    asyncio.run(crash())
+    assert _status(call["id"]) == "queued"  # popped from Redis, never dialled
+
     async def scenario(r, worker):
-        # undo the normal enqueue, then replay the crash by hand
-        await r.delete(keys.STREAM)
-        await worker.q.ensure_group()
-        await worker.queues.push(keys.SINGLE, [call["id"]])
-        _code, popped = await worker.queues.claim_next(keys.SINGLE, None, None)
-        assert popped == call["id"] and await r.zcard(keys.GLOBAL_CHANNELS) == 1
-        await r.zadd(keys.HANDOFF, {call["id"]: 0})  # its handoff deadline has passed
-        # (the running worker's sweep recovers it and then dials it normally)
+        # the worker's sweep notices the stale handoff, requeues the call and dials it normally
         assert await wait_for(lambda: _status(call["id"]) in TERMINAL, timeout=15)
         await asyncio.sleep(0.2)
         assert await r.zcard(keys.GLOBAL_CHANNELS) == 0

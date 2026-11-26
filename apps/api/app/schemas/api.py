@@ -58,6 +58,7 @@ class CallOut(ORM):
     contact_name: str
     custom_fields: dict[str, Any]
     script_prompt: str | None
+    is_test: bool = False
     status: str
     attempt: int
     outcome: dict[str, Any] | None
@@ -119,3 +120,20 @@ class DncOut(ORM):
     number: str
     source: str
     added_at: datetime
+
+
+# ---- browser test calls ----
+class TestCallCreate(BaseModel):
+    __test__ = False  # not a pytest class
+    script_prompt: str = Field(min_length=1, max_length=8000)
+    contact_name: str = Field(default="", max_length=200)
+    custom_fields: dict[str, str] = Field(default_factory=dict)
+
+
+class TestCallStarted(BaseModel):
+    __test__ = False
+    call_id: str
+    room: str
+    identity: str
+    token: str
+    url: str

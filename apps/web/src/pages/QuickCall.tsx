@@ -13,7 +13,7 @@ export default function QuickCallPage() {
   })
   const recent = useQuery({
     queryKey: ['single-calls'],
-    queryFn: () => api<{ items: Call[] }>('/calls?limit=20'),
+    queryFn: () => api<{ items: Call[] }>('/calls?is_test=false&limit=20'),
     refetchInterval: 4000,
   })
 

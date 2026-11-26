@@ -67,6 +67,7 @@ def list_calls(
     user: CurrentUser,
     db: DB,
     campaign_id: str | None = None,
+    is_test: bool | None = None,
     status_: Annotated[str | None, Query(alias="status")] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -74,6 +75,8 @@ def list_calls(
     q = select(Call).where(Call.owner_id == user.id)
     if campaign_id:
         q = q.where(Call.campaign_id == campaign_id)
+    if is_test is not None:
+        q = q.where(Call.is_test == is_test)
     if status_:
         q = q.where(Call.status == status_)
     total = db.scalar(select(func.count()).select_from(q.subquery())) or 0

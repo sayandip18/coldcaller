@@ -112,3 +112,29 @@ class LiveKitClient:
 
     async def aclose(self) -> None:
         await self._api.aclose()
+
+
+def customer_token(
+    room: str, identity: str, settings: Settings | None = None, ttl_seconds: int = 600
+) -> str:
+    """A short-lived token letting a browser join one room as the 'customer'. It can publish its
+    microphone and hear the room, and nothing else."""
+    from datetime import timedelta
+
+    s = settings or get_settings()
+    return (
+        api.AccessToken(s.livekit_api_key, s.livekit_api_secret)
+        .with_identity(identity)
+        .with_name("Test caller")
+        .with_ttl(timedelta(seconds=ttl_seconds))
+        .with_grants(
+            api.VideoGrants(
+                room_join=True,
+                room=room,
+                can_publish=True,
+                can_subscribe=True,
+                can_publish_data=False,
+            )
+        )
+        .to_jwt()
+    )

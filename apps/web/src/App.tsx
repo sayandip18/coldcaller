@@ -1,3 +1,4 @@
+import { Suspense, lazy } from 'react'
 import { NavLink, Navigate, Outlet, Route, Routes } from 'react-router-dom'
 import { useAuth } from './auth'
 import CallDetailPage from './pages/CallDetail'
@@ -9,6 +10,9 @@ import NewCampaignPage from './pages/NewCampaign'
 import QuickCallPage from './pages/QuickCall'
 import UsersPage from './pages/Users'
 
+// The LiveKit SDK is large and only this page needs it, so load it on demand.
+const TestCallPage = lazy(() => import('./pages/TestCall'))
+
 function Layout() {
   const { user, loading, logout } = useAuth()
   if (loading) return <p className="center muted">Loadingâ€¦</p>
@@ -19,6 +23,7 @@ function Layout() {
         <strong>Cold Caller</strong>
         <NavLink to="/" end>Campaigns</NavLink>
         <NavLink to="/quick-call">Quick call</NavLink>
+        <NavLink to="/test-call">Test call</NavLink>
         <NavLink to="/dnc">Do-not-call</NavLink>
         {user.role === 'admin' && <NavLink to="/users">Users</NavLink>}
         <span className="spacer" />
@@ -42,6 +47,14 @@ export default function App() {
         <Route path="campaigns/:id" element={<CampaignDetailPage />} />
         <Route path="calls/:id" element={<CallDetailPage />} />
         <Route path="quick-call" element={<QuickCallPage />} />
+        <Route
+          path="test-call"
+          element={
+            <Suspense fallback={<p className="muted">Loading…</p>}>
+              <TestCallPage />
+            </Suspense>
+          }
+        />
         <Route path="dnc" element={<DncPage />} />
         <Route path="users" element={<UsersPage />} />
       </Route>

@@ -80,3 +80,12 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
 .timeline { list-style: none; padding: 0; }
 .timeline li { padding: 4px 0; text-transform: capitalize; }
 .timeline time { color: var(--muted); margin-right: 8px; font-variant-numeric: tabular-nums; }
+
+.status-chip { padding: 3px 10px; border-radius: 99px; font-size: 0.85rem; background: var(--border); }
+.status-chip.live { background: #d5f0e6; color: #04342c; }
+.status-chip.connecting, .status-chip.waiting { background: #dbeafe; color: #1e3a8a; }
+.captions { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; min-height: 90px; max-height: 340px; overflow-y: auto; margin-bottom: 12px; }
+.cap { margin: 6px 0; }
+.cap b { margin-right: 6px; }
+.cap.you b { color: var(--accent); }
+.cap.interim { opacity: 0.6; }

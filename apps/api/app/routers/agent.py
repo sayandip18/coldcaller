@@ -81,7 +81,7 @@ def report_outcome(call_id: str, body: OutcomeIn, db: DB) -> dict[str, str]:
         db.add(CallEvent(call_id=call_id, type="outcome_reported", payload={"result": body.result}))
         db.commit()
 
-    if body.do_not_call:
+    if body.do_not_call and not call.is_test:  # a browser test has no real number to block
         db.execute(
             pg_insert(DncNumber)
             .values(owner_id=call.owner_id, number=call.to_number, source="user_request")

@@ -13,6 +13,7 @@ from sqlalchemy import (
     Text,
     Time,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -140,6 +141,9 @@ class Call(Base):
     transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # A call placed from the browser to try the agent. Never dialled, never queued, never
+    # added to the DNC list or sent to webhooks.
+    is_test: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     dialed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

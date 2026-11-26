@@ -123,3 +123,22 @@ uv run --directory apps/api python -m app.cli dlq list
 uv run --directory apps/api python -m app.cli dlq replay --dry-run
 uv run --directory apps/api python -m app.cli dlq replay            # or --call-id <id> / --limit N
 ```
+
+## Test call from your browser
+
+The **Test call** page lets you talk to the voice agent through your laptop microphone, with no
+phone, carrier or real number. Use it to tune the script, voice and behaviour.
+
+1. Start the stack: `pnpm infra:livekit` (and put your keys in `infra/agent.env`, see above).
+2. `pnpm dev`, sign in, open **Test call**, edit the script, and click **Start test call**.
+3. Allow the microphone. The agent joins a moment after you do and greets you. Live captions show
+   what each side said, and when you hang up the page shows the outcome and transcript the agent saved.
+
+Use headphones to avoid the agent hearing itself. Without provider keys the agent runs in stub mode,
+so you will see it join, report and hang up but will not hear a conversation.
+
+Test calls are recorded (and marked `is_test`) but never queued or dialled, never counted against
+channel or CPS limits, never checked against DNC/NCPR, never added to your DNC list, and never sent to
+webhooks. They are limited to 20 per hour per user. The browser needs to reach LiveKit at
+`LIVEKIT_URL` (default `ws://localhost:7880`); if you serve the app from another host, set
+`LIVEKIT_PUBLIC_URL` to the address your browser should use.
