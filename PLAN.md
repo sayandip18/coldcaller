@@ -127,7 +127,9 @@ Data fetching: TanStack Query with 2 to 5 second polling, protected routes using
 2. **Queue and worker**: Redis streams, CPS and channel Lua, worker with a **fake dialer**, finalizer, calling-window and DNC gates. Demo: 50 calls respect CPS and concurrency.
 3. **LiveKit integration**: livekit-server and livekit-sip in compose, real `CreateSIPParticipant`, webhook handler, agent dispatch. Demo: call to a SIP softphone or test trunk.
 4. **Voice agent**: full pipeline, per-contact prompt rendering, outcome tool and callback, voicemail detection, guardrails. Demo: end-to-end call with outcome and transcript in the UI.
-5. **Hardening**: retries and DLQ, lease reaper, webhook retries, NCPR provider, SNS sink, rate limiting on auth endpoints.
+5. **Hardening**: webhook retries, NCPR provider, SNS sink, rate limiting on auth endpoints, DLQ replay tooling, and **per-campaign queues** (see below). Dial retries, the DLQ, the lease reaper and the stuck-call reaper were already built in Phase 2.
+
+   **Known limitation from Phase 2: wasteful requeueing when a limit is hit.** When a call can't start because the campaign's channel cap or CPS is exhausted, the worker puts it back on a delayed set and retries about a second later. With thousands of waiting calls and a low CPS, almost every retry fails, so Redis does a lot of useless work. Fix: give each campaign its own queue (stream or list) and have the worker pull from a campaign only when it has both a free channel and a CPS token. Waiting calls then sit idle in their queue, and one slow campaign can't crowd out the others. Not needed at current scale; do it before running large campaigns.
 6. **Real carrier**: Asterisk bridge and Pulse trunk config, 140/160-series caller ID, test number, load test.
 
 ## Open items
