@@ -3,6 +3,7 @@ from typing import Annotated
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
 
 from app.auth.deps import DB, CurrentUser
@@ -11,6 +12,7 @@ from app.queue.producer import enqueue_calls
 from app.schemas.api import CampaignCreated, CampaignOut, RejectedRow
 from app.services.call_service import campaign_counts, start_campaign
 from app.services.csv_import import CsvError, parse_contacts_csv
+from app.services.webhooks import validate_webhook_url
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
@@ -77,6 +79,12 @@ async def create_campaign(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "Calling window must be within 09:00-21:00 for promotional calls",
         )
+
+    if webhook_url:
+        try:
+            await run_in_threadpool(validate_webhook_url, webhook_url)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
     data = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:

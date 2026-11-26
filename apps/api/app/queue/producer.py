@@ -42,3 +42,8 @@ def release_channels(call_id: str, campaign_id: str | None) -> None:
     except redis.RedisError:
         # The worker's lease reconciliation (and lease expiry) will free it.
         log.exception("could not release channels for %s", call_id)
+
+
+def redis_client() -> redis.Redis:
+    """Shared sync Redis client for API-side features (rate limits, DLQ tooling)."""
+    return _client()

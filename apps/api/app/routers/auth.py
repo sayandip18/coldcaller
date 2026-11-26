@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from sqlalchemy import select
 
+from app.auth import ratelimit
 from app.auth.deps import DB, AdminUser, CurrentUser
 from app.auth.security import (
     create_session,
@@ -17,11 +18,22 @@ router = APIRouter(tags=["auth"])
 
 
 @router.post("/auth/login", response_model=UserOut)
-def login(body: LoginIn, response: Response, db: DB) -> User:
-    user = db.scalar(select(User).where(User.email == body.email.lower()))
+def login(body: LoginIn, request: Request, response: Response, db: DB) -> User:
+    email = body.email.lower()
+    ip = request.client.host if request.client else "unknown"
+    wait = ratelimit.locked_for(email, ip)
+    if wait:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "Too many failed attempts. Try again later.",
+            headers={"Retry-After": str(wait)},
+        )
+    user = db.scalar(select(User).where(User.email == email))
     ok = verify_password(body.password, user.password_hash if user else None)
     if not ok or user is None or not user.is_active:
+        ratelimit.record_failure(email, ip)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password")
+    ratelimit.record_success(email, ip)
     settings = get_settings()
     token = create_session(db, user)
     response.set_cookie(

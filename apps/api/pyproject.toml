@@ -7,6 +7,7 @@ requires-python = ">=3.14"
 dependencies = [
     "alembic>=1.14",
     "argon2-cffi>=23.1",
+    "boto3>=1.44.12",
     "fastapi[standard]>=0.165.0",
     "httpx>=0.28.1",
     "livekit-agents>=1.9",

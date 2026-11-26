@@ -237,14 +237,14 @@ def test_speech_failure_does_not_stop_the_call_from_ending():
 
 def test_missing_keys_and_mode_resolution():
     s = Settings(agent_mode="auto")
-    assert missing_keys(s, {}) == ["DEEPGRAM_API_KEY", "CARTESIA_API_KEY", "ANTHROPIC_API_KEY"]
+    assert missing_keys(s, {}) == ["DEEPGRAM_API_KEY", "CARTESIA_API_KEY", "OPENAI_API_KEY"]
     assert resolve_mode(s, {}) == "stub"
-    full = {"DEEPGRAM_API_KEY": "a", "CARTESIA_API_KEY": "b", "ANTHROPIC_API_KEY": "c"}
+    full = {"DEEPGRAM_API_KEY": "a", "CARTESIA_API_KEY": "b", "OPENAI_API_KEY": "c"}
     assert resolve_mode(s, full) == "live"
     assert resolve_mode(Settings(agent_mode="stub"), full) == "stub"
     assert resolve_mode(Settings(agent_mode="live"), {}) == "live"  # main.py then fails loudly
-    openai = Settings(agent_llm_provider="openai")
-    assert missing_keys(openai, full) == ["OPENAI_API_KEY"]
+    claude = Settings(agent_llm_provider="anthropic")
+    assert missing_keys(claude, full) == ["ANTHROPIC_API_KEY"]
     with pytest.raises(ValueError):
         resolve_mode(Settings(agent_mode="bogus"), {})
     with pytest.raises(ValueError):

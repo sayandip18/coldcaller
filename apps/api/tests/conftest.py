@@ -37,7 +37,8 @@ def _clean():
     with engine.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE call_events, calls, campaigns, dnc_numbers, sessions, users CASCADE"
+                "TRUNCATE call_events, calls, campaigns, dnc_numbers, ncpr_numbers, "
+                "webhook_deliveries, sessions, users CASCADE"
             )
         )
 

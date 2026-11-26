@@ -168,3 +168,34 @@ class DncNumber(Base):
     number: Mapped[str] = mapped_column(String(20), index=True)
     source: Mapped[str] = mapped_column(String(32), default="import")
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class NcprNumber(Base):
+    """National Customer Preference Register: numbers that must not receive promotional calls.
+    Global (not per user). Loaded by an admin import; see app/services/ncpr.py."""
+
+    __tablename__ = "ncpr_numbers"
+
+    number: Mapped[str] = mapped_column(String(20), primary_key=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WebhookDelivery(Base):
+    """A pending/finished HTTP notification to a campaign's webhook URL."""
+
+    __tablename__ = "webhook_deliveries"
+    __table_args__ = (Index("ix_webhook_due", "status", "next_attempt_at"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    campaign_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    call_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    event: Mapped[str] = mapped_column(String(32))
+    url: Mapped[str] = mapped_column(String(2048))
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|delivered|failed
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

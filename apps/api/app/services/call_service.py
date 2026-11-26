@@ -1,6 +1,7 @@
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.db.models import (
     Call,
     CallEvent,
@@ -10,17 +11,29 @@ from app.db.models import (
     DncNumber,
     utcnow,
 )
+from app.services.ncpr import ncpr_registered
+from app.services.webhooks import enqueue_call_event
 
 
 def add_event(db: Session, call: Call, type_: str, **payload) -> None:
     db.add(CallEvent(call_id=call.id, type=type_, payload=payload))
 
 
-def is_dnc(db: Session, owner_id: str, number: str) -> bool:
-    return (
-        db.scalar(select(DncNumber.id).where(DncNumber.owner_id == owner_id, DncNumber.number == number))
-        is not None
+def is_blocked(db: Session, owner_id: str, number: str) -> str | None:
+    """Why this number must not be called, or None. 'dnc' = the owner's own list,
+    'ncpr' = the national do-not-disturb register (promotional calls)."""
+    own = db.scalar(
+        select(DncNumber.id).where(DncNumber.owner_id == owner_id, DncNumber.number == number)
     )
+    if own is not None:
+        return "dnc"
+    if get_settings().ncpr_enforce and ncpr_registered(db, number):
+        return "ncpr"
+    return None
+
+
+def is_dnc(db: Session, owner_id: str, number: str) -> bool:
+    return is_blocked(db, owner_id, number) is not None
 
 
 def queue_call(db: Session, call: Call) -> bool:
@@ -30,10 +43,12 @@ def queue_call(db: Session, call: Call) -> bool:
     queued calls to `queue.producer.enqueue_calls` (after commit, so a worker never sees a
     call id whose row isn't visible yet).
     """
-    if is_dnc(db, call.owner_id, call.to_number):
+    reason = is_blocked(db, call.owner_id, call.to_number)
+    if reason:
         call.status = CallStatus.skipped_dnc.value
         call.ended_at = utcnow()
-        add_event(db, call, "skipped_dnc")
+        add_event(db, call, "skipped_dnc", reason=reason)
+        enqueue_call_event(db, call.id, CallStatus.skipped_dnc.value)
         return False
     call.status = CallStatus.queued.value
     call.queued_at = utcnow()

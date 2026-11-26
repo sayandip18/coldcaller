@@ -18,6 +18,7 @@ from app.db.models import (
     CampaignStatus,
     utcnow,
 )
+from app.services.webhooks import enqueue_call_event, enqueue_campaign_done
 
 ACTIVE = (CallStatus.dialing, CallStatus.ringing, CallStatus.answered, CallStatus.in_progress)
 
@@ -44,6 +45,8 @@ def mark(
         db.rollback()
         return False
     db.add(CallEvent(call_id=call_id, type=event or to.value, payload=payload or {}))
+    if to in TERMINAL_CALL_STATUSES:
+        enqueue_call_event(db, call_id, to.value)  # same transaction as the status change
     db.commit()
     return True
 
@@ -84,5 +87,6 @@ def finalize_campaigns(db: Session) -> list[str]:
             .where(Campaign.id == cid, Campaign.status == CampaignStatus.running.value)
             .values(status=CampaignStatus.done.value, updated_at=utcnow())
         )
+        enqueue_campaign_done(db, cid)
     db.commit()
     return ids

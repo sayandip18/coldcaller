@@ -76,6 +76,21 @@ def livekit_trunk(args: argparse.Namespace) -> int:
     return asyncio.run(run())
 
 
+def dlq_command(args: argparse.Namespace) -> int:
+    from app.services.dlq import list_dlq, replay_dlq
+
+    if args.action == "list":
+        rows = list_dlq(args.limit)
+        for row in rows:
+            print(f"{row['call_id']}  {row['status']:<8} {row['to_number']}  {row['reason'][:80]}")
+        print(f"{len(rows)} dead-lettered call(s)")
+        return 0
+    ids = replay_dlq(args.limit, args.call_id, args.dry_run)
+    verb = "would replay" if args.dry_run else "replayed"
+    print(f"{verb} {len(ids)} call(s)")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="app.cli")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -91,7 +106,14 @@ def main() -> int:
     t.add_argument("--number", action="append", default=[], help="caller-ID number(s); repeatable")
     t.add_argument("--username")
     t.add_argument("--password")
+    d = sub.add_parser("dlq", help="inspect or replay calls the worker gave up on")
+    d.add_argument("action", choices=["list", "replay"])
+    d.add_argument("--limit", type=int, default=100)
+    d.add_argument("--call-id")
+    d.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    if args.cmd == "dlq":
+        return dlq_command(args)
     if args.cmd == "livekit-trunk":
         if args.action == "create" and (not args.address or not args.number):
             parser.error("create needs --address and at least one --number")

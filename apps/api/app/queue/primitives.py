@@ -57,23 +57,6 @@ class CallQueue:
         await pipe.execute()
 
 
-class RateLimiter:
-    """Token buckets: carrier-wide plus (optionally) per campaign, taken atomically."""
-
-    def __init__(self, r: Redis, carrier_cps: int):
-        self.carrier_cps = carrier_cps
-        self._take = r.register_script(lua.TAKE_TOKENS)
-
-    async def take(self, campaign_id: str | None, campaign_cps: int | None) -> int:
-        """Return 0 if a call may start now, else milliseconds to wait."""
-        bucket_keys = [keys.GLOBAL_CPS]
-        rates = [self.carrier_cps]
-        if campaign_id and campaign_cps:
-            bucket_keys.append(keys.campaign_cps(campaign_id))
-            rates.append(campaign_cps)
-        return int(await self._take(keys=bucket_keys, args=rates))
-
-
 class Channels:
     """Concurrency limits as leases. A lease is released when the call ends, or expires."""
 
@@ -98,3 +81,69 @@ class Channels:
         if campaign_id:
             pipe.zrem(keys.campaign_channels(campaign_id), call_id)
         await pipe.execute()
+
+
+CLAIMED, CAMPAIGN_FULL, GLOBAL_FULL, RATE_LIMITED, EMPTY = 1, 2, 3, 4, 5
+
+
+class CampaignQueues:
+    """One ready list per campaign. A call is popped only when its campaign may start it, so
+    calls waiting behind a limit are never touched, and a slow campaign cannot hold up others."""
+
+    def __init__(self, r: Redis, *, carrier_cps: int, global_max: int, lease_seconds: int):
+        self.r = r
+        self.carrier_cps, self.global_max = carrier_cps, global_max
+        self.lease_ms = lease_seconds * 1000
+        self.handoff_ms = 60_000
+        self._claim = r.register_script(lua.CLAIM_NEXT)
+
+    async def push(self, queue_id: str, call_ids: list[str]) -> None:
+        pipe = self.r.pipeline(transaction=True)
+        pipe.rpush(keys.ready_queue(queue_id), *call_ids)
+        pipe.sadd(keys.ACTIVE, queue_id)
+        await pipe.execute()
+
+    async def push_front(self, queue_id: str, call_id: str) -> None:
+        pipe = self.r.pipeline(transaction=True)
+        pipe.lpush(keys.ready_queue(queue_id), call_id)
+        pipe.sadd(keys.ACTIVE, queue_id)
+        await pipe.execute()
+
+    async def active(self) -> list[str]:
+        return sorted(await self.r.smembers(keys.ACTIVE))
+
+    async def depth(self, queue_id: str) -> int:
+        return int(await self.r.llen(keys.ready_queue(queue_id)))
+
+    async def claim_next(
+        self, queue_id: str, campaign_max: int | None, campaign_cps: int | None
+    ) -> tuple[int, str | int]:
+        is_campaign = queue_id != keys.SINGLE
+        res = await self._claim(
+            keys=[
+                keys.ready_queue(queue_id),
+                keys.ACTIVE,
+                keys.GLOBAL_CHANNELS,
+                keys.campaign_channels(queue_id),
+                keys.GLOBAL_CPS,
+                keys.campaign_cps(queue_id),
+                keys.HANDOFF,
+            ],
+            args=[
+                queue_id,
+                self.lease_ms,
+                self.global_max,
+                (campaign_max or 0) if is_campaign else 0,
+                self.carrier_cps,
+                (campaign_cps or 0) if is_campaign else 0,
+                self.handoff_ms,
+            ],
+        )
+        return int(res[0]), res[1]
+
+    async def ack_handoff(self, call_id: str) -> None:
+        await self.r.zrem(keys.HANDOFF, call_id)
+
+    async def expired_handoffs(self, limit: int = 100) -> list[str]:
+        now = int((await self.r.time())[0]) * 1000
+        return list(await self.r.zrangebyscore(keys.HANDOFF, "-inf", now, start=0, num=limit))

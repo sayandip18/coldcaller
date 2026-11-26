@@ -1,6 +1,6 @@
 from fastapi import APIRouter, FastAPI
 
-from app.routers import agent, auth, calls, campaigns, dnc, livekit
+from app.routers import agent, auth, calls, campaigns, dnc, livekit, ncpr, webhooks
 
 app = FastAPI(title="Cold Caller API")
 
@@ -18,5 +18,7 @@ api.include_router(calls.router)
 api.include_router(dnc.router)
 api.include_router(agent.router)
 api.include_router(livekit.router)
+api.include_router(ncpr.router)
+api.include_router(webhooks.router)
 
 app.include_router(api)

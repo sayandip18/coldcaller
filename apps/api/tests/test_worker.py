@@ -252,3 +252,84 @@ def test_plan_call_defers_outside_window_and_skips_dnc(member):
         db.commit()
     assert plan_call(calls["+919876500002"], settings, 5, now=noon).action == "drop"
     assert _status(calls["+919876500002"]) == "skipped_dnc"
+
+
+# ------------------------------------------------------ per-campaign queues (Phase 5)
+def evalsha_calls(info: dict) -> int:
+    return int(info.get("cmdstat_evalsha", {}).get("calls", 0))
+
+
+def test_calls_waiting_behind_a_limit_cost_almost_nothing(member):
+    """150 calls wait behind max_concurrency=1. They must not be polled one by one."""
+    made = create(member, csv=numbers_csv(150), cps=50, max_concurrency=1).json()
+    cid = made["campaign"]["id"]
+    member.post(f"/api/campaigns/{cid}/start")
+    used = {}
+
+    async def scenario(r, worker):
+        await r.config_resetstat()
+        await asyncio.sleep(1.5)  # one slow call occupies the only slot the whole time
+        used["evals"] = evalsha_calls(await r.info("commandstats"))
+        used["depth"] = await worker.queues.depth(cid)
+
+    run_worker(
+        scenario,
+        dialer_factory=fast_dialer(ring_s=(2.0, 2.0), talk_s=(2.0, 2.0)),
+        carrier_cps=100,
+    )
+    assert used["depth"] >= 148  # nothing but the first call has left the queue
+    # one scheduler pass per ~100 ms plus the delayed-set mover; the old design re-tried every call
+    assert used["evals"] < 60, used
+
+
+def test_a_slow_campaign_does_not_hold_up_another(member):
+    slow = create(member, csv=numbers_csv(30), name="slow", cps=1, max_concurrency=5).json()
+    quick = create(member, csv=numbers_csv(5).replace("98765", "98764"), name="quick", cps=50, max_concurrency=5).json()
+    slow_id, quick_id = slow["campaign"]["id"], quick["campaign"]["id"]
+    member.post(f"/api/campaigns/{slow_id}/start")
+    member.post(f"/api/campaigns/{quick_id}/start")
+    seen = {}
+
+    async def scenario(r, worker):
+        assert await wait_for(lambda: campaign_status(quick_id) == "done", timeout=10)
+        seen["slow_still_waiting"] = await worker.queues.depth(slow_id)
+
+    run_worker(scenario, dialer_factory=fast_dialer(), carrier_cps=100, max_global_channels=50)
+    assert seen["slow_still_waiting"] >= 20  # slow campaign is crawling at 1 call/second
+    assert campaign_status(slow_id) == "running"
+
+
+def test_call_lost_between_pop_and_dial_is_recovered(member):
+    """Worker popped a call (slot reserved) and died before marking it dialing."""
+    call = member.post("/api/calls", json={"to_number": "9876500001", "script_prompt": "hi"}).json()
+
+    async def scenario(r, worker):
+        # undo the normal enqueue, then replay the crash by hand
+        await r.delete(keys.STREAM)
+        await worker.q.ensure_group()
+        await worker.queues.push(keys.SINGLE, [call["id"]])
+        _code, popped = await worker.queues.claim_next(keys.SINGLE, None, None)
+        assert popped == call["id"] and await r.zcard(keys.GLOBAL_CHANNELS) == 1
+        await r.zadd(keys.HANDOFF, {call["id"]: 0})  # its handoff deadline has passed
+        # (the running worker's sweep recovers it and then dials it normally)
+        assert await wait_for(lambda: _status(call["id"]) in TERMINAL, timeout=15)
+        await asyncio.sleep(0.2)
+        assert await r.zcard(keys.GLOBAL_CHANNELS) == 0
+        assert await r.zcard(keys.HANDOFF) == 0
+
+    run_worker(scenario, dialer_factory=fast_dialer(p_no_answer=0, p_busy=0, p_fail=0), carrier_cps=100)
+    assert _status(call["id"]) == "completed"
+
+
+def test_paused_campaign_keeps_its_calls_queued_and_resumes(member):
+    cid = create(member, csv=numbers_csv(4)).json()["campaign"]["id"]
+    member.post(f"/api/campaigns/{cid}/start")
+    member.post(f"/api/campaigns/{cid}/pause")
+
+    async def scenario(r, worker):
+        await asyncio.sleep(1.2)
+        assert await worker.queues.depth(cid) == 4  # untouched while paused
+        member.post(f"/api/campaigns/{cid}/resume")
+        assert await wait_for(lambda: campaign_status(cid) == "done", timeout=15)
+
+    run_worker(scenario, dialer_factory=fast_dialer(), carrier_cps=100)

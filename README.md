@@ -62,7 +62,7 @@ call's concurrency slot. The `sipp` container answers every call, so no real car
 ## Voice agent (Phase 4)
 
 The agent (`apps/api/app/agent`) is a LiveKit agent: Deepgram speech-to-text, an LLM
-(Claude by default, or OpenAI), and Cartesia text-to-speech. It runs in the `agent` container.
+(OpenAI `gpt-4o-mini` by default; Claude is supported), and Cartesia text-to-speech. It runs in the `agent` container.
 
 **API keys go in `infra/agent.env`** (copy `infra/agent.env.example`; the file is gitignored and
 only the agent container reads it):
@@ -70,7 +70,7 @@ only the agent container reads it):
 ```
 DEEPGRAM_API_KEY=...
 CARTESIA_API_KEY=...
-ANTHROPIC_API_KEY=...     # or set AGENT_LLM_PROVIDER=openai and OPENAI_API_KEY
+OPENAI_API_KEY=...        # or AGENT_LLM_PROVIDER=anthropic with ANTHROPIC_API_KEY
 ```
 
 Then `pnpm infra:livekit` to rebuild and restart the agent. `AGENT_MODE=auto` (the default) runs
@@ -89,3 +89,37 @@ why; follows the campaign script (with `{name}` and CSV columns filled in); and 
 * a hard stop after `AGENT_MAX_CALL_SECONDS` (default 300) with a polite goodbye
 
 The transcript and outcome are saved on the call and shown on its page.
+
+## Operations and hardening (Phase 5)
+
+**Queueing.** Each campaign has its own ready queue in Redis. The worker pops a call only when
+its campaign has a free channel and a CPS slot, in one atomic step, so calls waiting behind a
+limit cost nothing and a slow campaign never holds up another. `CARRIER_CPS` and each campaign's
+`cps` pace calls one every 1/cps seconds with no burst, because carriers enforce CPS strictly.
+
+**Webhooks.** A campaign's `webhook_url` receives `call.completed` for each call that ends and
+`campaign.done` when all calls have ended. Delivery is at-least-once with exponential backoff
+(8 attempts), so de-duplicate on the `X-Coldcaller-Delivery` header. Verify each request with
+`X-Coldcaller-Signature: v1=<hex>`, the HMAC-SHA256 of `"<X-Coldcaller-Timestamp>.<raw body>"`
+keyed with `WEBHOOK_SIGNING_SECRET`. URLs must be public `https` (private, loopback and
+link-local addresses are refused, at save time and again at delivery); set
+`WEBHOOK_ALLOW_PRIVATE=true` in dev only. Status of each delivery: `GET /api/webhooks/deliveries`.
+
+**Do-not-disturb (NCPR).** An admin uploads the register as text, one number per line:
+`POST /api/ncpr/import` (multipart `file`). Numbers on it are never dialled, checked when queued and
+again just before dialling. `NCPR_ENFORCE=false` disables the check.
+
+**Alerts.** Set `SNS_TOPIC_ARN` (and AWS credentials in the worker's environment) to publish a
+message when a campaign finishes; without it the alert is only logged.
+
+**Login limits.** Failed logins are limited per email+IP (5), per IP (20) and per email (30) over
+15 minutes, answered with `429` and `Retry-After`.
+
+**Dead-letter queue.** Calls the worker gave up on (for example LiveKit was down) are listed with
+with the CLI:
+
+```
+uv run --directory apps/api python -m app.cli dlq list
+uv run --directory apps/api python -m app.cli dlq replay --dry-run
+uv run --directory apps/api python -m app.cli dlq replay            # or --call-id <id> / --limit N
+```
