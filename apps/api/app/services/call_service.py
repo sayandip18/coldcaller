@@ -23,28 +23,31 @@ def is_dnc(db: Session, owner_id: str, number: str) -> bool:
     )
 
 
-def queue_call(db: Session, call: Call) -> None:
+def queue_call(db: Session, call: Call) -> bool:
     """Move a draft call to queued, or skip it if the number is on the owner's DNC list.
 
-    Phase 2 will additionally push the call id onto the Redis stream here.
+    Returns True if the call is now queued. The caller must commit, then pass the ids of
+    queued calls to `queue.producer.enqueue_calls` (after commit, so a worker never sees a
+    call id whose row isn't visible yet).
     """
     if is_dnc(db, call.owner_id, call.to_number):
         call.status = CallStatus.skipped_dnc.value
         call.ended_at = utcnow()
         add_event(db, call, "skipped_dnc")
-        return
+        return False
     call.status = CallStatus.queued.value
     call.queued_at = utcnow()
     add_event(db, call, "queued")
+    return True
 
 
-def start_campaign(db: Session, campaign: Campaign) -> None:
+def start_campaign(db: Session, campaign: Campaign) -> list[str]:
+    """Queue every draft call. Returns the ids to enqueue once the transaction is committed."""
     campaign.status = CampaignStatus.running.value
     drafts = db.scalars(
         select(Call).where(Call.campaign_id == campaign.id, Call.status == CallStatus.draft.value)
     )
-    for call in drafts:
-        queue_call(db, call)
+    return [call.id for call in drafts if queue_call(db, call)]
 
 
 def campaign_counts(db: Session, campaign_ids: list[str]) -> dict[str, dict[str, int]]:

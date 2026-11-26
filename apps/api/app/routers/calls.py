@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.auth.deps import DB, CurrentUser
 from app.db.models import Call, CallEvent
+from app.queue.producer import enqueue_calls
 from app.schemas.api import CallCreate, CallDetail, CallOut, CallPage
 from app.services.call_service import add_event, queue_call
 from app.services.phone import normalize_in_number
@@ -54,8 +55,10 @@ def create_call(
             return existing
         raise
     add_event(db, call, "created")
-    queue_call(db, call)
+    queued = queue_call(db, call)
     db.commit()
+    if queued:
+        enqueue_calls([call.id])
     return call
 
 

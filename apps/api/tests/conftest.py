@@ -6,7 +6,10 @@ os.environ["DATABASE_URL"] = os.environ.get(
     "postgresql+psycopg://coldcaller:coldcaller@localhost:5432/coldcaller_test",
 )
 
+os.environ["REDIS_URL"] = os.environ.get("TEST_REDIS_URL", "redis://localhost:6380/15")
+
 import pytest
+import redis as redis_sync
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
@@ -28,7 +31,9 @@ def _schema():
 
 @pytest.fixture(autouse=True)
 def _clean():
+    redis_sync.Redis.from_url(os.environ["REDIS_URL"]).flushdb()
     yield
+    redis_sync.Redis.from_url(os.environ["REDIS_URL"]).flushdb()
     with engine.begin() as conn:
         conn.execute(
             text(

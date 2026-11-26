@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from app.auth.deps import DB, CurrentUser
 from app.db.models import Call, Campaign, CampaignStatus
+from app.queue.producer import enqueue_calls
 from app.schemas.api import CampaignCreated, CampaignOut, RejectedRow
 from app.services.call_service import campaign_counts, start_campaign
 from app.services.csv_import import CsvError, parse_contacts_csv
@@ -139,8 +140,9 @@ def start(campaign_id: str, user: CurrentUser, db: DB) -> CampaignOut:
     campaign = _get_owned(db, user.id, campaign_id)
     if campaign.status != CampaignStatus.draft.value:
         raise HTTPException(status.HTTP_409_CONFLICT, f"Cannot start a {campaign.status} campaign")
-    start_campaign(db, campaign)
+    queued_ids = start_campaign(db, campaign)
     db.commit()
+    enqueue_calls(queued_ids)
     return _out(db, [campaign])[0]
 
 
