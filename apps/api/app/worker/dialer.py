@@ -6,8 +6,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from livekit import api as lk_api
+from sqlalchemy import select
 
-from app.db.models import CallStatus, utcnow
+from app.db.models import Call, CallStatus, utcnow
 from app.db.session import SessionLocal
 from app.livekit_client import LiveKitClient, classify_twirp_error
 from app.services.lifecycle import ACTIVE, mark
@@ -133,7 +134,9 @@ class LiveKitDialer(Dialer):
         agent_name: str,
         ring_timeout_s: int,
         max_call_s: int,
+        agent_join_timeout_s: float = 10.0,
     ):
+        self.agent_join_timeout_s = agent_join_timeout_s
         self.release, self.on_error, self.client = release, on_error, client
         self.trunk_id, self.agent_name = trunk_id, agent_name
         self.ring_timeout_s, self.max_call_s = ring_timeout_s, max_call_s
@@ -184,6 +187,28 @@ class LiveKitDialer(Dialer):
             log.exception("agent dispatch failed for %s", req.call_id)
             await self._hang_up(req)
             await self._finish(req, CallStatus.failed, f"agent dispatch failed: {exc}")
+            return
+
+        # LiveKit accepts a dispatch even when no agent is running (e.g. mid-deploy) and then
+        # drops it, which would leave the customer on a silent line. Insist the agent shows up.
+        if not await self._agent_joined(req):
+            log.warning("agent never joined %s; hanging up", req.call_id)
+            await self._hang_up(req)
+            await self._finish(req, CallStatus.failed, "agent did not join the call in time")
+
+    async def _agent_joined(self, req: DialRequest) -> bool:
+        """True once the call has moved past `answered` (the webhook marks `in_progress`)."""
+
+        def still_waiting() -> bool:
+            with SessionLocal() as db:
+                return db.scalar(select(Call.status).where(Call.id == req.call_id)) == CallStatus.answered.value
+
+        deadline = asyncio.get_running_loop().time() + self.agent_join_timeout_s
+        while asyncio.get_running_loop().time() < deadline:
+            if not await asyncio.to_thread(still_waiting):
+                return True
+            await asyncio.sleep(0.25)
+        return not await asyncio.to_thread(still_waiting)
 
     async def _finish(self, req: DialRequest, status: CallStatus, reason: str) -> None:
         await self._step(

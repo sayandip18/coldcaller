@@ -61,8 +61,14 @@ def test_error_without_sip_status_is_treated_as_infrastructure():
 
 # ------------------------------------------------------------------ dialer logic
 class FakeLiveKit:
-    def __init__(self, dial_error: Exception | None = None, dispatch_error: Exception | None = None):
+    def __init__(
+        self,
+        dial_error: Exception | None = None,
+        dispatch_error: Exception | None = None,
+        agent_joins: bool = True,
+    ):
         self.dial_error, self.dispatch_error = dial_error, dispatch_error
+        self.agent_joins = agent_joins
         self.calls: list = []
 
     async def dial(self, **kw):
@@ -74,6 +80,10 @@ class FakeLiveKit:
         self.calls.append(("dispatch", room, agent_name, json.loads(metadata)))
         if self.dispatch_error:
             raise self.dispatch_error
+        if self.agent_joins:  # what the participant_joined webhook does when the agent connects
+            call_id = json.loads(metadata)["call_id"]
+            with SessionLocal() as db:
+                mark(db, call_id, [CallStatus.answered], CallStatus.in_progress, event="agent_joined")
 
     async def delete_room(self, room):
         self.calls.append(("delete_room", room))
@@ -92,7 +102,7 @@ def make_dialing_call(member_email="m@test.dev") -> Call:
         return call
 
 
-def run_dialer(client: FakeLiveKit, call: Call):
+def run_dialer(client: FakeLiveKit, call: Call, join_timeout: float = 2.0):
     released, errors = [], []
 
     async def release(cid, camp):
@@ -104,7 +114,7 @@ def run_dialer(client: FakeLiveKit, call: Call):
     async def main():
         d = LiveKitDialer(
             release, on_error, client, trunk_id="ST_x", agent_name="coldcaller-agent",
-            ring_timeout_s=30, max_call_s=600,
+            ring_timeout_s=30, max_call_s=600, agent_join_timeout_s=join_timeout,
         )
         req = DialRequest(call.id, call.to_number, "+911111111111", None, f"call-{call.id}")
         await d.dial(req)
@@ -123,7 +133,7 @@ def test_answered_call_dispatches_agent_and_keeps_its_slot():
     call = make_dialing_call()
     lk = FakeLiveKit()
     released, errors = run_dialer(lk, call)
-    assert status_of(call.id) == "answered"  # in_progress comes when the agent joins (webhook)
+    assert status_of(call.id) == "in_progress"  # the agent joined
     assert released == [] and errors == []  # slot held until the call ends
     kinds = [c[0] for c in lk.calls]
     assert kinds == ["dial", "dispatch"]
@@ -154,6 +164,33 @@ def test_agent_dispatch_failure_hangs_up_and_fails_the_call():
     released, _ = run_dialer(lk, call)
     assert status_of(call.id) == "failed"
     assert ("delete_room", f"call-{call.id}") in lk.calls and released == [call.id]
+
+
+def test_agent_that_never_joins_gets_the_customer_hung_up_on_quickly():
+    """LiveKit accepts a dispatch when no agent is running, then drops it."""
+    call = make_dialing_call()
+    lk = FakeLiveKit(agent_joins=False)
+    released, _ = run_dialer(lk, call, join_timeout=0.5)
+    assert status_of(call.id) == "failed"
+    assert ("delete_room", f"call-{call.id}") in lk.calls  # the line is dropped, not left silent
+    assert released == [call.id]
+    with SessionLocal() as db:
+        row = db.get(Call, call.id)
+    assert row.failure_reason == "agent did not join the call in time"
+
+
+def test_a_call_that_already_ended_is_not_failed_by_the_watchdog():
+    """Customer hangs up (room_finished completes the call) before the join check runs."""
+    call = make_dialing_call()
+
+    class Hangup(FakeLiveKit):
+        async def dispatch_agent(self, room, agent_name, metadata):
+            await super().dispatch_agent(room, agent_name, metadata)
+            with SessionLocal() as db:
+                mark(db, call.id, [CallStatus.answered, CallStatus.in_progress], CallStatus.completed)
+
+    released, _ = run_dialer(Hangup(agent_joins=False), call, join_timeout=0.5)
+    assert status_of(call.id) == "completed" and released == []
 
 
 # --------------------------------------------------------------------- webhooks

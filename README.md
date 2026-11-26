@@ -53,9 +53,39 @@ answer. On answer it marks the call `answered` and dispatches the agent into the
 webhooks (`/api/livekit/webhook`) mark the agent joining and the room finishing, and free the
 call's concurrency slot. The `sipp` container answers every call, so no real carrier is needed.
 
-* The agent in this phase is a **stub** (joins, waits a few seconds, reports an outcome, hangs up).
-  The real STT/LLM/TTS conversation is Phase 4.
+* The agent has two modes, see below. Without provider keys it runs as a stub.
 * The agent runs in a container because LiveKit media (WebRTC) stays inside the Docker network.
 * To use a real carrier or Asterisk bridge, create a trunk with its address and credentials instead.
 * `AGENT_SHARED_SECRET` and the LiveKit key/secret in `infra/` are dev defaults. Change them
   before exposing anything.
+
+## Voice agent (Phase 4)
+
+The agent (`apps/api/app/agent`) is a LiveKit agent: Deepgram speech-to-text, an LLM
+(Claude by default, or OpenAI), and Cartesia text-to-speech. It runs in the `agent` container.
+
+**API keys go in `infra/agent.env`** (copy `infra/agent.env.example`; the file is gitignored and
+only the agent container reads it):
+
+```
+DEEPGRAM_API_KEY=...
+CARTESIA_API_KEY=...
+ANTHROPIC_API_KEY=...     # or set AGENT_LLM_PROVIDER=openai and OPENAI_API_KEY
+```
+
+Then `pnpm infra:livekit` to rebuild and restart the agent. `AGENT_MODE=auto` (the default) runs
+the real conversation when all three keys are present and the stub otherwise; `AGENT_MODE=live`
+fails the call with an `error` outcome if a key is missing, which is safer for production.
+
+What the agent does on a call: opens by saying it is an AI assistant, who it is calling for and
+why; follows the campaign script (with `{name}` and CSV columns filled in); and ends by calling an
+`end_call` tool with a result (`interested`, `not_interested`, `callback_requested`, `wrong_person`,
+`voicemail`, `do_not_call`, ...), notes and a follow-up. Rules in code, not left to the LLM:
+
+* an opt-out ("stop calling me", "remove my number", ...) apologises, hangs up and adds the number to
+  the DNC list
+* a voicemail greeting early in the call ends the call without leaving a message
+* 12 seconds of silence asks "are you still there?", then hangs up
+* a hard stop after `AGENT_MAX_CALL_SECONDS` (default 300) with a polite goodbye
+
+The transcript and outcome are saved on the call and shown on its page.

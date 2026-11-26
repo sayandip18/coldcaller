@@ -17,3 +17,6 @@ apps/api/.env*
 .env
 __pycache__/
 *.pyc
+
+# Provider API keys for the voice agent
+infra/agent.env

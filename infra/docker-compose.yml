@@ -64,6 +64,10 @@ services:
       context: ..
       dockerfile: infra/Dockerfile.agent
     profiles: [livekit]
+    # Provider keys and agent tuning live in infra/agent.env (gitignored, optional).
+    env_file:
+      - path: ./agent.env
+        required: false
     environment:
       LIVEKIT_URL: ws://livekit:7880
       LIVEKIT_API_KEY: devkey

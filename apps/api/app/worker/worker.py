@@ -223,6 +223,7 @@ class Worker:
                 agent_name=s.livekit_agent_name,
                 ring_timeout_s=s.livekit_ring_timeout,
                 max_call_s=s.max_call_seconds,
+                agent_join_timeout_s=s.agent_join_timeout,
             )
         raise RuntimeError(f"unknown DIALER '{s.dialer}'")
 

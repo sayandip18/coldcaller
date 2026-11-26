@@ -33,11 +33,25 @@ class Settings(BaseSettings):
     livekit_sip_trunk_id: str = ""
     livekit_agent_name: str = "coldcaller-agent"
     livekit_ring_timeout: int = 40  # seconds the customer's phone may ring
+    # After the customer answers, how long to wait for the agent to join before hanging up.
+    agent_join_timeout: float = 10.0
     # Shared secret the voice agent presents when calling the API back. Override outside dev.
     agent_shared_secret: str = "dev-agent-secret-change-me"
     # Where the agent reaches the API (it runs in a container, so not localhost)
     agent_api_url: str = "http://host.docker.internal:8000/api"
-    agent_stub_seconds: float = 5.0  # Phase 3 stub agent: how long to "talk"
+    agent_stub_seconds: float = 5.0  # stub mode: how long to "talk"
+
+    # --- voice agent (Phase 4). Provider API keys are read from the environment by the
+    # LiveKit plugins: DEEPGRAM_API_KEY, CARTESIA_API_KEY, ANTHROPIC_API_KEY / OPENAI_API_KEY.
+    agent_mode: str = "auto"  # auto (live if keys present, else stub) | live | stub
+    agent_llm_provider: str = "anthropic"  # anthropic | openai
+    agent_llm_model: str = ""  # empty = provider default below
+    agent_stt_model: str = "nova-3"
+    agent_stt_language: str = "en-IN"
+    agent_tts_model: str = "sonic-3"
+    agent_tts_voice: str = ""  # Cartesia voice id; empty = plugin default
+    agent_max_call_seconds: int = 300  # polite hard stop (must be < max_call_seconds)
+    agent_user_away_timeout: float = 12.0  # silence before "are you still there?"
 
     # --- fake dialer simulation ---
     fake_ring_min: float = 1.0
