@@ -344,3 +344,18 @@ def test_paused_campaign_keeps_its_calls_queued_and_resumes(member):
         assert await wait_for(lambda: campaign_status(cid) == "done", timeout=15)
 
     run_worker(scenario, dialer_factory=fast_dialer(), carrier_cps=100)
+
+
+def test_worker_survives_redis_losing_its_stream_and_consumer_group(member):
+    """Redis restarted or was flushed under a running worker: it must not crash, and calls queued
+    afterwards (and ones that were queued in the database before) still get dialled."""
+    first = member.post("/api/calls", json={"to_number": "9876500001", "script_prompt": "hi"}).json()
+
+    async def scenario(r, worker):
+        assert await wait_for(lambda: _status(first["id"]) in TERMINAL, timeout=15)
+        await r.flushall()  # the stream, the consumer group and everything else vanish
+        await asyncio.sleep(1.5)  # the worker's stream read fails and it recovers
+        second = member.post("/api/calls", json={"to_number": "9876500002", "script_prompt": "hi"}).json()
+        assert await wait_for(lambda: _status(second["id"]) in TERMINAL, timeout=15)
+
+    run_worker(scenario, dialer_factory=fast_dialer(), carrier_cps=100)

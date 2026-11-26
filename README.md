@@ -142,3 +142,16 @@ channel or CPS limits, never checked against DNC/NCPR, never added to your DNC l
 webhooks. They are limited to 20 per hour per user. The browser needs to reach LiveKit at
 `LIVEKIT_URL` (default `ws://localhost:7880`); if you serve the app from another host, set
 `LIVEKIT_PUBLIC_URL` to the address your browser should use.
+
+## Real carrier (Phase 6)
+
+The SIP bridge to the carrier is Asterisk, configured entirely from `infra/carrier.env` (copy
+`infra/carrier.env.example`). `pnpm infra:carrier` starts it with LiveKit and the agent; with no
+`carrier.env` it dials the local `sipp` test container, so the whole chain runs without a carrier.
+
+* Caller IDs: `ALLOWED_CALLER_IDS` / `DEFAULT_CALLER_ID` restrict what customers see, checked when a
+  campaign is created and again before each dial.
+* Load test: `pnpm loadtest --calls 200 --concurrency 30 --cps 8 --global-limit 30 --email ... --password ...`
+  pushes a campaign through the running system and checks every limit held.
+* **Read [docs/going-live.md](docs/going-live.md)** for what to ask the carrier, the settings, firewall
+  and capacity guidance, measured results, and the steps for the first real calls.

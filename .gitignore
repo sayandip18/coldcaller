@@ -20,3 +20,6 @@ __pycache__/
 
 # Provider API keys for the voice agent
 infra/agent.env
+
+# Carrier credentials
+infra/carrier.env

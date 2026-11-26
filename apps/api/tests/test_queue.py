@@ -174,3 +174,30 @@ def test_next_allowed_time():
     assert next_allowed_time(late, ist, start, end) == datetime(2026, 1, 6, 3, 30, tzinfo=UTC)
     boundary = datetime(2026, 1, 5, 15, 30, tzinfo=UTC)  # exactly 21:00 IST is outside
     assert next_allowed_time(boundary, ist, start, end) > boundary
+
+
+def test_a_late_call_is_paid_back_but_never_turns_into_a_burst():
+    """At 20 calls/s a slot opens every 50 ms. If the scheduler is 10 ms late, the next call may
+    follow ~40 ms later (so the average rate is kept) but two calls must not start together."""
+
+    async def scenario(r):
+        cq = make_queues(r, cps=100_000)
+        await cq.push("c1", [f"x{i}" for i in range(8)])
+        assert (await cq.claim_next("c1", 50, 20))[0] == CLAIMED
+        await asyncio.sleep(0.060)  # 10 ms late for the 50 ms slot
+        assert (await cq.claim_next("c1", 50, 20))[0] == CLAIMED
+        code, wait = await cq.claim_next("c1", 50, 20)  # immediately again: no burst
+        assert code == RATE_LIMITED and 20 <= wait <= 45  # the banked time shortens the wait a little
+
+    run_with_redis(scenario)
+
+
+def test_long_idle_time_cannot_be_banked_into_a_burst():
+    async def scenario(r):
+        cq = make_queues(r, cps=100_000)
+        await cq.push("c1", [f"x{i}" for i in range(8)])
+        await r.hset(keys.campaign_cps("c1"), mapping={"tokens": "1", "ts": "1"})  # idle "forever"
+        assert (await cq.claim_next("c1", 50, 20))[0] == CLAIMED
+        assert (await cq.claim_next("c1", 50, 20))[0] == RATE_LIMITED  # still only one at a time
+
+    run_with_redis(scenario)

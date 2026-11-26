@@ -72,9 +72,12 @@ local function refill(key, rate)
   local tokens = tonumber(h[1])
   local ts = tonumber(h[2])
   if tokens == nil then tokens = 1; ts = now end
-  -- Capacity is ONE token: calls are paced 1/rate apart and can never burst, so a carrier
-  -- that enforces "N calls per second" is never exceeded, not even for an instant.
-  return math.min(1, tokens + (now - ts) * rate / 1000)
+  -- Capacity is one token plus up to 15 ms worth (at most half a token). The extra lets a call
+  -- that was started a little late be paid back, so the configured rate is actually reached;
+  -- without it every scheduling delay is lost and the rate falls ~20% short. Capacity stays
+  -- below 2, so calls are still paced one at a time and never burst.
+  local cap = 1 + math.min(0.5, 0.015 * rate)
+  return math.min(cap, tokens + (now - ts) * rate / 1000)
 end
 
 local wait = 0

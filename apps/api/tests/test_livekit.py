@@ -45,11 +45,17 @@ def twirp(
         (twirp("failed_precondition", 486, "INVITE failed: sip status: 486: Busy Here", 412), "busy"),
         (twirp("permission_denied", 603, "unexpected status from INVITE response", 403), "busy"),
         (twirp("unknown", 404), "failed"),
-        (twirp("unknown", 503), "failed"),
     ],
 )
 def test_sip_errors_are_classified(exc, kind):
     assert classify_twirp_error(exc).kind == kind
+
+
+@pytest.mark.parametrize("sip", [401, 403, 407, 500, 502, 503, 504])
+def test_carrier_refusals_and_errors_are_infrastructure_not_the_customers_fault(sip):
+    """The carrier refusing us, erroring, or being unreachable (the bridge answers 503) must be
+    retried and dead-lettered, never recorded as a failed call to that customer."""
+    assert classify_twirp_error(twirp("failed_precondition", sip, status=412)) is None
 
 
 def test_error_without_sip_status_is_treated_as_infrastructure():
@@ -66,8 +72,10 @@ class FakeLiveKit:
         dial_error: Exception | None = None,
         dispatch_error: Exception | None = None,
         agent_joins: bool = True,
+        dispatch_failures: int = 0,
     ):
         self.dial_error, self.dispatch_error = dial_error, dispatch_error
+        self.dispatch_failures = dispatch_failures  # first N dispatches fail, then succeed
         self.agent_joins = agent_joins
         self.calls: list = []
 
@@ -78,6 +86,9 @@ class FakeLiveKit:
 
     async def dispatch_agent(self, room, agent_name, metadata):
         self.calls.append(("dispatch", room, agent_name, json.loads(metadata)))
+        if self.dispatch_failures > 0:
+            self.dispatch_failures -= 1
+            raise RuntimeError("could not find any available nodes")
         if self.dispatch_error:
             raise self.dispatch_error
         if self.agent_joins:  # what the participant_joined webhook does when the agent connects
@@ -115,6 +126,7 @@ def run_dialer(client: FakeLiveKit, call: Call, join_timeout: float = 2.0):
         d = LiveKitDialer(
             release, on_error, client, trunk_id="ST_x", agent_name="coldcaller-agent",
             ring_timeout_s=30, max_call_s=600, agent_join_timeout_s=join_timeout,
+            dispatch_retry_delays=(0.0, 0.0),
         )
         req = DialRequest(call.id, call.to_number, "+911111111111", None, f"call-{call.id}")
         await d.dial(req)
@@ -164,6 +176,16 @@ def test_agent_dispatch_failure_hangs_up_and_fails_the_call():
     released, _ = run_dialer(lk, call)
     assert status_of(call.id) == "failed"
     assert ("delete_room", f"call-{call.id}") in lk.calls and released == [call.id]
+
+
+def test_a_momentary_dispatch_refusal_is_retried_and_the_call_goes_ahead():
+    """'No available nodes' while every agent worker is busy starting one clears in a moment."""
+    call = make_dialing_call()
+    lk = FakeLiveKit(dispatch_failures=2)
+    released, errors = run_dialer(lk, call)
+    assert status_of(call.id) == "in_progress"  # the third attempt got through and the agent joined
+    assert [c[0] for c in lk.calls].count("dispatch") == 3 and ("delete_room", f"call-{call.id}") not in lk.calls
+    assert released == [] and errors == []
 
 
 def test_agent_that_never_joins_gets_the_customer_hung_up_on_quickly():

@@ -130,7 +130,7 @@ Data fetching: TanStack Query with 2 to 5 second polling, protected routes using
 5. **Hardening** (done): per-campaign ready queues, durable outbound webhooks with retries and an SSRF guard, an NCPR check, an SNS alert sink, login rate limiting, and DLQ replay.
 
    Replaced the Phase 2 requeue-on-limit design: each campaign has its own ready queue and a call is popped only when its campaign has a free channel and rate-limit slot (one atomic script), so waiting calls cost nothing and a slow campaign cannot hold up others. Rate limiting now paces calls 1/cps apart with no burst, because carriers enforce CPS strictly.
-6. **Real carrier**: Asterisk bridge and Pulse trunk config, 140/160-series caller ID, test number, load test.
+6. **Real carrier** (bridge and load testing done; real carrier pending): Asterisk bridge configured from environment and proven end to end against simulated carriers (busy, no answer, decline, invalid number, refused, error, unreachable all map correctly), caller-ID allow-list, load-test tool, and a go-live runbook (`docs/going-live.md`). **Still needs a carrier account**: Pulse/ConnectHub credentials, number series, a test number, and a repeat of the load test with the real agent on production hardware.
 
 ## Open items
 

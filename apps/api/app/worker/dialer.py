@@ -135,8 +135,10 @@ class LiveKitDialer(Dialer):
         ring_timeout_s: int,
         max_call_s: int,
         agent_join_timeout_s: float = 10.0,
+        dispatch_retry_delays: tuple[float, ...] = (1.0, 2.0),
     ):
         self.agent_join_timeout_s = agent_join_timeout_s
+        self.dispatch_retry_delays = dispatch_retry_delays
         self.release, self.on_error, self.client = release, on_error, client
         self.trunk_id, self.agent_name = trunk_id, agent_name
         self.ring_timeout_s, self.max_call_s = ring_timeout_s, max_call_s
@@ -179,15 +181,22 @@ class LiveKitDialer(Dialer):
             # The call was failed/reaped while ringing; don't leave a live call behind.
             await self._hang_up(req)
             return
-        try:
-            await self.client.dispatch_agent(
-                req.room, self.agent_name, json.dumps({"call_id": req.call_id})
-            )
-        except Exception as exc:
-            log.exception("agent dispatch failed for %s", req.call_id)
-            await self._hang_up(req)
-            await self._finish(req, CallStatus.failed, f"agent dispatch failed: {exc}")
-            return
+        # The customer has already answered, so a refused dispatch is a silent call. "No available
+        # nodes" is usually momentary (every agent worker is busy starting one), so try again a
+        # couple of times before giving up on the call.
+        metadata = json.dumps({"call_id": req.call_id})
+        for attempt, delay in enumerate((*self.dispatch_retry_delays, None), start=1):
+            try:
+                await self.client.dispatch_agent(req.room, self.agent_name, metadata)
+                break
+            except Exception as exc:
+                if delay is None:
+                    log.exception("agent dispatch failed for %s after %d attempts", req.call_id, attempt)
+                    await self._hang_up(req)
+                    await self._finish(req, CallStatus.failed, f"agent dispatch failed: {exc}")
+                    return
+                log.warning("agent dispatch for %s failed (%s); retrying in %.1fs", req.call_id, exc, delay)
+                await asyncio.sleep(delay)
 
         # LiveKit accepts a dispatch even when no agent is running (e.g. mid-deploy) and then
         # drops it, which would leave the customer on a silent line. Insist the agent shows up.

@@ -1,0 +1,49 @@
+; Generated from extensions.conf.tmpl by start.sh.
+
+[general]
+static=yes
+writeprotect=yes
+
+[globals]
+KEEP_PLUS=$DIAL_KEEP_PLUS
+DIAL_PREFIX=$DIAL_PREFIX
+RING_SECONDS=$RING_SECONDS
+
+; ---- calls coming from LiveKit: dial them out through the carrier -------------------------
+[from-livekit]
+; LiveKit sends E.164, e.g. +919876543210. Carriers differ on the format they accept:
+;   DIAL_KEEP_PLUS=yes  -> send +919876543210 as is
+;   DIAL_KEEP_PLUS=no   -> send 919876543210
+;   DIAL_PREFIX=0       -> prepend a digit/string (e.g. a trunk access code) after that
+exten => _[+0-9].,1,NoOp(outbound ${EXTEN} caller-id ${CALLERID(num)})
+ same => n,Set(NUMBER=${EXTEN})
+ same => n,ExecIf($["${KEEP_PLUS}"!="yes"]?Set(NUMBER=${NUMBER:1}):NoOp())
+ same => n,ExecIf($["${EXTEN:0:1}"!="+"]?Set(NUMBER=${EXTEN}):NoOp())
+ same => n,Set(NUMBER=${DIAL_PREFIX}${NUMBER})
+ same => n,Dial(PJSIP/${NUMBER}@carrier,${RING_SECONDS})
+ ; The carrier's own SIP answer (486, 603, 404 ...) is what tells the cases apart; Asterisk's
+ ; generic cause codes do not (a declined call and a forbidden one are both "21").
+ same => n,Set(CKEY=${HANGUPCAUSE_KEYS()})
+ ; The carrier's answer arrives as text, e.g. "SIP 603 Decline"; keep the 3-digit code.
+ same => n,Set(SIPCODE=${HANGUPCAUSE(${CKEY},tech):4:3})
+ same => n,NoOp(dial result: status=${DIALSTATUS} q850=${HANGUPCAUSE} carrier-sip=${SIPCODE})
+ same => n,GotoIf($["${DIALSTATUS}"="ANSWER" | "${DIALSTATUS}"="CANCEL"]?done)
+ ; Tell LiveKit what happened, in terms the app reacts to differently:
+ ;   busy / declined by the customer      -> 486  (call marked busy)
+ ;   rang out, or temporarily unavailable -> 480  (no answer)
+ ;   number does not exist                -> 404  (failed, not retried)
+ ;   anything else: carrier refused US (403/401), carrier errors (5xx), carrier unreachable
+ ;                                        -> 503  (infrastructure: the app retries, then dead-letters)
+ same => n,GotoIf($["${SIPCODE}"="486" | "${SIPCODE}"="600" | "${SIPCODE}"="603" | "${DIALSTATUS}"="BUSY"]?busy)
+ same => n,GotoIf($["${SIPCODE}"="480" | "${SIPCODE}"="487" | "${DIALSTATUS}"="NOANSWER"]?noanswer)
+ same => n,GotoIf($["${SIPCODE}"="404" | "${SIPCODE}"="410" | "${SIPCODE}"="484" | "${SIPCODE}"="604"]?invalid)
+ same => n,Congestion()
+ same => n(busy),Busy()
+ same => n(noanswer),Hangup(19)
+ same => n(invalid),Hangup(1)
+ same => n(done),Hangup()
+
+; ---- nothing is accepted from the carrier: this system only places calls ---------------------
+[from-carrier]
+exten => _X.,1,Hangup(21)
+exten => _+X.,1,Hangup(21)

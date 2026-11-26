@@ -1,0 +1,59 @@
+; Generated from pjsip.conf.tmpl by start.sh. Do not edit the generated copy.
+;
+; Topology:   LiveKit SIP  --(SIP/RTP)-->  Asterisk  --(SIP/RTP)-->  carrier (Pulse / ConnectHub)
+; Asterisk is a plain B2BUA here: it hides carrier specifics (credentials, number format, codecs)
+; from the rest of the system and passes the carrier's busy / no-answer / reject results back.
+
+[transport-udp]
+type=transport
+protocol=udp
+bind=0.0.0.0:5060
+$NAT_BLOCK
+
+; ---------------------------------------------------------------- from LiveKit
+[livekit]
+type=endpoint
+context=from-livekit
+transport=transport-udp
+disallow=all
+allow=ulaw
+allow=alaw
+direct_media=no
+rtp_symmetric=yes
+force_rport=yes
+rewrite_contact=yes
+dtmf_mode=rfc4733
+; Caller ID comes from the SIP From header LiveKit sends; trust it and pass it on.
+trust_id_inbound=yes
+
+[livekit-identify]
+type=identify
+endpoint=livekit
+match=$LIVEKIT_SIP_MATCH
+
+; ------------------------------------------------------------------ to carrier
+[carrier-aor]
+type=aor
+contact=sip:$PULSE_HOST:$PULSE_PORT
+qualify_frequency=$PULSE_QUALIFY_SECONDS
+
+[carrier]
+type=endpoint
+context=from-carrier
+transport=transport-udp
+disallow=all
+allow=ulaw
+allow=alaw
+direct_media=no
+rtp_symmetric=yes
+force_rport=yes
+dtmf_mode=rfc4733
+aors=carrier-aor
+$CARRIER_ENDPOINT_EXTRA
+
+[carrier-identify]
+type=identify
+endpoint=carrier
+match=$PULSE_HOST
+
+$CARRIER_AUTH_BLOCK

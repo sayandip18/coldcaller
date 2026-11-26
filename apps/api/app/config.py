@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     max_call_seconds: int = 600  # hard cap; also the channel lease length
     dial_max_attempts: int = 3
 
+    # --- caller ID (see app/services/caller_id.py) ---
+    allowed_caller_ids: str = ""  # comma-separated numbers or prefixes ending in *; empty = any
+    default_caller_id: str = ""
+
     # --- outbound webhooks ---
     webhook_signing_secret: str = "dev-webhook-secret-change-me"
     webhook_allow_private: bool = False  # True only in dev: lets webhooks target localhost/LAN
@@ -65,6 +69,10 @@ class Settings(BaseSettings):
     agent_tts_voice: str = ""  # Cartesia voice id; empty = plugin default
     agent_max_call_seconds: int = 300  # polite hard stop (must be < max_call_seconds)
     agent_user_away_timeout: float = 12.0  # silence before "are you still there?"
+    # Warm (pre-started) agent processes. Starting one takes seconds, so under a steady stream of
+    # new calls the pool must cover roughly (new calls per second x 3). When it runs dry callers
+    # wait in silence and the join watchdog hangs up. Each process costs memory.
+    agent_idle_processes: int = 16
 
     # --- fake dialer simulation ---
     fake_ring_min: float = 1.0

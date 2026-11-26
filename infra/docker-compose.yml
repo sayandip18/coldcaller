@@ -80,6 +80,21 @@ services:
     depends_on:
       - livekit
 
+  # ---- SIP bridge to the carrier: `--profile carrier` (see infra/carrier.env.example) ----
+  # LiveKit dials through this; it dials the carrier. By default the "carrier" is the sipp test
+  # container, so the whole chain can be exercised without a real carrier account.
+  asterisk:
+    image: andrius/asterisk:latest
+    profiles: [carrier]
+    entrypoint: ["/bin/bash", "/start.sh"]
+    command: ["/usr/sbin/asterisk", "-vvvf", "-T", "-n", "-U", "asterisk", "-p"]
+    env_file:
+      - path: ./carrier.env
+        required: false
+    volumes:
+      - ./asterisk:/templates:ro
+      - ./asterisk/start.sh:/start.sh:ro
+
   # ---- fake phone network for testing: answers every call (profile "livekit-test") ----
   sipp:
     image: ctaloi/sipp:latest

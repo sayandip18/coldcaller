@@ -4,7 +4,10 @@ ws_url: ws://livekit:7880
 redis:
   address: livekit-redis:6379
 sip_port: 5060
-rtp_port: 10000-10100
+# Media ports for calls. Each live call (and for a while after it ends) holds some, so a small range
+# fails under load with "failed to listen on udp port". On a real host, size it for your peak
+# concurrency (see docs/going-live.md) and open exactly this range to the carrier.
+rtp_port: 10000-20000
 use_external_ip: false
 logging:
   level: info

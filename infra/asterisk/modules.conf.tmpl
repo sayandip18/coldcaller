@@ -1,0 +1,38 @@
+; Only what a SIP-to-SIP bridge needs. The defaults load LDAP/database/telephony-card drivers
+; that spam the log with errors and do nothing here.
+[modules]
+autoload=yes
+noload=res_config_ldap.so
+noload=res_config_pgsql.so
+noload=res_config_mysql.so
+noload=res_config_odbc.so
+noload=res_config_sqlite3.so
+noload=res_config_curl.so
+noload=res_odbc.so
+noload=res_odbc_transaction.so
+noload=cdr_pgsql.so
+noload=cdr_odbc.so
+noload=cdr_adaptive_odbc.so
+noload=cdr_tds.so
+noload=cel_pgsql.so
+noload=cel_odbc.so
+noload=cel_tds.so
+noload=chan_dahdi.so
+noload=res_calendar.so
+noload=res_calendar_caldav.so
+noload=res_calendar_ews.so
+noload=res_calendar_exchange.so
+noload=res_calendar_icalendar.so
+noload=res_fax.so
+noload=res_fax_spandsp.so
+noload=chan_alsa.so
+noload=chan_console.so
+noload=func_odbc.so
+noload=format_ogg_vorbis.so
+noload=cel_custom.so
+; Call-detail records are not used here (the app keeps its own call records), and the default
+; CSV writer fails on every hangup because its directory does not exist.
+noload=cdr_csv.so
+noload=cdr_custom.so
+noload=cdr_sqlite3_custom.so
+noload=cdr_manager.so

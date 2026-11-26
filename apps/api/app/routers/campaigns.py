@@ -11,6 +11,8 @@ from app.db.models import Call, Campaign, CampaignStatus
 from app.queue.producer import enqueue_calls
 from app.schemas.api import CampaignCreated, CampaignOut, RejectedRow
 from app.services.call_service import campaign_counts, start_campaign
+from app.services.caller_id import caller_id_error
+from app.services.caller_id import normalize as normalize_caller_id
 from app.services.csv_import import CsvError, parse_contacts_csv
 from app.services.webhooks import validate_webhook_url
 
@@ -80,6 +82,9 @@ async def create_campaign(
             "Calling window must be within 09:00-21:00 for promotional calls",
         )
 
+    caller_error = caller_id_error(caller_id)
+    if caller_error:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, caller_error)
     if webhook_url:
         try:
             await run_in_threadpool(validate_webhook_url, webhook_url)
@@ -100,7 +105,7 @@ async def create_campaign(
         owner_id=user.id,
         name=name,
         script_prompt=script_prompt,
-        caller_id=caller_id,
+        caller_id=normalize_caller_id(caller_id),
         max_concurrency=max_concurrency,
         cps=cps,
         timezone=timezone,

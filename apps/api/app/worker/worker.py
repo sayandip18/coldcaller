@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 
 from redis.asyncio import Redis
-from sqlalchemy import func, or_, select
+from redis.exceptions import RedisError
+from sqlalchemy import or_, select
 
 from app.config import Settings, get_settings
 from app.db.models import (
@@ -33,6 +34,8 @@ from app.queue.primitives import (
 )
 from app.services.alerts import AlertSink, alert_campaign_finished, get_sink
 from app.services.call_service import is_blocked
+from app.services.caller_id import caller_id_error
+from app.services.caller_id import effective as effective_caller_id
 from app.services.compliance import next_allowed_time
 from app.services.lifecycle import finalize_campaigns, mark, reap_stuck_calls
 from app.services.webhooks import WebhookSender
@@ -98,6 +101,22 @@ def plan_call(call_id: str, settings: Settings, pause_delay_s: float, now: datet
             )
             return Plan("drop")
 
+        # Last line of defence: never present a caller ID this deployment is not allowed to use,
+        # even if the allow-list changed after the campaign was created.
+        caller_id = effective_caller_id(campaign.caller_id if campaign else "", settings)
+        bad_caller_id = caller_id_error(caller_id, settings)
+        if bad_caller_id:
+            mark(
+                db,
+                call.id,
+                [CallStatus.queued],
+                CallStatus.failed,
+                event="caller_id_rejected",
+                payload={"reason": bad_caller_id},
+                failure_reason=bad_caller_id[:255],
+            )
+            return Plan("drop")
+
         if campaign is not None:
             tz, start, end = campaign.timezone, campaign.call_window_start, campaign.call_window_end
         else:
@@ -115,7 +134,7 @@ def plan_call(call_id: str, settings: Settings, pause_delay_s: float, now: datet
                 campaign_id=campaign.id if campaign else None,
                 max_concurrency=campaign.max_concurrency if campaign else None,
                 cps=campaign.cps if campaign else None,
-                caller_id=campaign.caller_id if campaign else "",
+                caller_id=caller_id,
             ),
         )
 
@@ -128,7 +147,7 @@ def claim_call(call_id: str) -> bool:
             [CallStatus.queued],
             CallStatus.dialing,
             event="dialing",
-            dialed_at=func.now(),
+            dialed_at=utcnow(),  # same clock as answered_at/ended_at, so durations are consistent
             attempt=Call.attempt + 1,
             livekit_room=f"call-{call_id}",
         )
@@ -290,6 +309,7 @@ class Worker:
         self._inflight: set[asyncio.Task] = set()
         self._skip_until: dict[str, float] = {}  # queue id -> monotonic time to look again
         self._global_block_until = 0.0
+        self._next_wake = 0.0  # monotonic time of the earliest queue we are waiting on
         self._configs: dict[str, QueueConfig] = {}
         self._configs_at = 0.0
         self._rotation = 0
@@ -374,11 +394,13 @@ class Worker:
     async def schedule_once(self) -> int:
         """One pass over the campaigns with waiting calls; returns how many calls it started.
         Cost is proportional to the number of campaigns, not the number of waiting calls."""
+        self._next_wake = 0.0
         active = await self.queues.active()
         if not active:
             return 0
         now = _time.monotonic()
         if now < self._global_block_until:
+            self._next_wake = self._global_block_until
             return 0
         configs = await self._load_configs(active)
         self._rotation += 1
@@ -415,6 +437,11 @@ class Worker:
                 break  # EMPTY needs no skip: the script already removed it from the active set
             if self._global_block_until > now:
                 break
+        # When to look again: the soonest moment any waiting queue may be able to start a call.
+        waits = [t for t in self._skip_until.values() if t > now]
+        if self._global_block_until > now:
+            waits.append(self._global_block_until)
+        self._next_wake = min(waits) if waits else 0.0
         return started
 
     async def _dial_popped(self, call_id: str, queue_id: str) -> None:
@@ -467,16 +494,32 @@ class Worker:
     # ------------------------------------------------------------------ loops
     async def _consume(self) -> None:
         while True:
-            resp = await self.r.xreadgroup(
-                keys.GROUP, self.consumer, {keys.STREAM: ">"}, count=200, block=1000
-            )
-            for _, messages in resp or []:
-                # sequential on purpose: it is the backpressure on a huge campaign start
-                await self.ingest([(msg_id, f["call_id"]) for msg_id, f in messages])
+            try:
+                resp = await self.r.xreadgroup(
+                    keys.GROUP, self.consumer, {keys.STREAM: ">"}, count=200, block=1000
+                )
+                for _, messages in resp or []:
+                    # sequential on purpose: it is the backpressure on a huge campaign start
+                    await self.ingest([(msg_id, f["call_id"]) for msg_id, f in messages])
+            except RedisError as exc:
+                # Redis restarted or was flushed (the stream and its consumer group are gone), or
+                # the connection dropped. Recreate the group and carry on; calls that were queued
+                # in the database are re-enqueued by the orphan sweeper.
+                log.warning("stream read failed (%s); recovering", exc)
+                await asyncio.sleep(1.0)
+                try:
+                    await self.q.ensure_group()
+                except RedisError:
+                    log.exception("could not recreate the consumer group yet")
 
     async def _delayed_loop(self) -> None:
         while True:
-            moved = await self.q.move_due()
+            moved = 0
+            try:
+                moved = await self.q.move_due()
+            except RedisError as exc:
+                log.warning("delayed-set mover failed (%s); retrying", exc)
+                await asyncio.sleep(1.0)
             await asyncio.sleep(0.05 if moved >= 500 else 0.2)
 
     async def _schedule_loop(self) -> None:
@@ -486,7 +529,13 @@ class Worker:
             except Exception:
                 log.exception("scheduler pass failed")
                 started = 0
-            await asyncio.sleep(0 if started else SCHEDULER_TICK_S)
+            if started:
+                await asyncio.sleep(0)
+                continue
+            # Sleep exactly until the next slot opens (not a fixed tick, which would cap the
+            # start rate of a campaign at 1/tick calls per second whatever its CPS limit).
+            until = self._next_wake - _time.monotonic() if self._next_wake else SCHEDULER_TICK_S
+            await asyncio.sleep(min(SCHEDULER_TICK_S, max(0.001, until)))
 
     async def _webhook_loop(self) -> None:
         while True:

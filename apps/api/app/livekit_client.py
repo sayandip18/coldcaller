@@ -14,6 +14,7 @@ from app.config import Settings, get_settings
 # SIP final responses (RFC 3261) mapped to what they mean for a cold call.
 BUSY_CODES = {486, 600, 603}  # busy here / busy everywhere / decline
 NO_ANSWER_CODES = {408, 480, 487}  # timeout / temporarily unavailable / request terminated
+INFRA_CODES = {401, 403, 407, 500, 502, 503, 504}  # carrier/bridge refused or broke: retry
 INVALID_NUMBER_CODES = {404, 410, 484, 604}  # not found / gone / address incomplete / no such number
 
 
@@ -44,6 +45,11 @@ def classify_twirp_error(exc: api.TwirpError) -> SipFailure | None:
         return SipFailure("no_answer", f"no answer (timeout: {text})".strip())
     if code in INVALID_NUMBER_CODES:
         return SipFailure("failed", f"invalid number (SIP {code} {text})".strip())
+    # The carrier (or our bridge to it) is unwell or misconfigured: 401/403/407 = refused us,
+    # 5xx = their side broke. Not the customer's doing, so retry and dead-letter, never mark the
+    # call failed for good.
+    if code in INFRA_CODES:
+        return None
     if code is not None:
         return SipFailure("failed", f"SIP {code} {text}".strip())
     return None

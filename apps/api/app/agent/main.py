@@ -34,12 +34,14 @@ GREETING = (
 
 
 def prewarm(proc: JobProcess) -> None:
+    if resolve_mode(settings) != "live":
+        return  # the stub never listens, so don't spend CPU and memory loading the voice model
     from livekit.plugins import silero
 
     proc.userdata["vad"] = silero.VAD.load()
 
 
-server = agents.AgentServer(setup_fnc=prewarm)
+server = agents.AgentServer(setup_fnc=prewarm, num_idle_processes=settings.agent_idle_processes)
 
 
 async def run_stub(ctx: agents.JobContext, call_id: str, api: AgentApi, call: dict) -> None:
