@@ -13,16 +13,17 @@ from sqlalchemy import select
 from app.config import Settings, get_settings
 from app.db.models import Call, CallStatus, Campaign, CampaignStatus
 from app.db.session import SessionLocal
+from app.livekit_client import LiveKitClient
 from app.queue import keys
 from app.queue.primitives import CallQueue, Channels, RateLimiter
 from app.services.call_service import is_dnc
 from app.services.compliance import next_allowed_time
 from app.services.lifecycle import finalize_campaigns, mark, reap_stuck_calls
-from app.worker.dialer import Dialer, DialRequest, FakeDialer
+from app.worker.dialer import Dialer, DialRequest, FakeDialer, LiveKitDialer
 
 log = logging.getLogger(__name__)
 
-DialerFactory = Callable[[Callable], Dialer]
+DialerFactory = Callable[[Callable, Callable], Dialer]
 
 
 @dataclass
@@ -159,6 +160,21 @@ def find_orphans(limit: int = 500) -> list[str]:
         return list(db.scalars(q))
 
 
+def ended_leases(call_ids: list[str]) -> list[tuple[str, str | None]]:
+    """Of the calls holding a channel lease, those that are already finished (or unknown)."""
+    from app.db.models import TERMINAL_CALL_STATUSES
+
+    terminal = {s.value for s in TERMINAL_CALL_STATUSES}
+    with SessionLocal() as db:
+        rows = db.execute(
+            select(Call.id, Call.campaign_id, Call.status).where(Call.id.in_(call_ids))
+        ).all()
+    known = {r[0] for r in rows}
+    ended = [(cid, camp) for cid, camp, st in rows if st in terminal]
+    ended += [(cid, None) for cid in call_ids if cid not in known]
+    return ended
+
+
 class Worker:
     def __init__(
         self,
@@ -185,18 +201,30 @@ class Worker:
         self.retry_base_s = retry_base_s
         self.consumer = consumer or f"{socket.gethostname()}-{os.getpid()}"
         factory = dialer_factory or self._default_dialer
-        self.dialer: Dialer = factory(self.release_call)
+        self.dialer: Dialer = factory(self.release_call, self.handle_dial_error)
         self._inflight: set[asyncio.Task] = set()
 
-    def _default_dialer(self, release) -> Dialer:
+    def _default_dialer(self, release, on_error) -> Dialer:
         s = self.settings
-        if s.dialer != "fake":
-            raise RuntimeError(f"dialer '{s.dialer}' is not available yet")
-        return FakeDialer(
-            release,
-            ring_s=(s.fake_ring_min, s.fake_ring_max),
-            talk_s=(s.fake_talk_min, s.fake_talk_max),
-        )
+        if s.dialer == "fake":
+            return FakeDialer(
+                release,
+                ring_s=(s.fake_ring_min, s.fake_ring_max),
+                talk_s=(s.fake_talk_min, s.fake_talk_max),
+            )
+        if s.dialer == "livekit":
+            if not s.livekit_sip_trunk_id:
+                raise RuntimeError("DIALER=livekit needs LIVEKIT_SIP_TRUNK_ID (see `cli livekit-trunk`)")
+            return LiveKitDialer(
+                release,
+                on_error,
+                LiveKitClient(s),
+                trunk_id=s.livekit_sip_trunk_id,
+                agent_name=s.livekit_agent_name,
+                ring_timeout_s=s.livekit_ring_timeout,
+                max_call_s=s.max_call_seconds,
+            )
+        raise RuntimeError(f"unknown DIALER '{s.dialer}'")
 
     async def release_call(self, call_id: str, campaign_id: str | None) -> None:
         await self.channels.release(call_id, campaign_id)
@@ -236,14 +264,19 @@ class Worker:
             )
         except Exception as exc:  # noqa: BLE001 - any dialer error is a retryable dial failure
             log.warning("dial failed for %s: %s", c.id, exc)
-            await self.channels.release(c.id, c.campaign_id)
-            outcome, attempt = await asyncio.to_thread(
-                fail_dial, c.id, str(exc), self.settings.dial_max_attempts
-            )
-            if outcome == "retry":
-                await self.q.delay(call_id, min(300.0, self.retry_base_s * 2 ** (attempt - 1)))
-            else:
-                await self.q.dead_letter(call_id, str(exc))
+            await self.handle_dial_error(DialRequest(c.id, "", "", c.campaign_id, ""), str(exc))
+
+    async def handle_dial_error(self, req: DialRequest, error: str) -> None:
+        """A dial attempt failed for infrastructure reasons: free the slot, then retry with
+        backoff or, after too many attempts, fail the call and dead-letter it."""
+        await self.channels.release(req.call_id, req.campaign_id)
+        outcome, attempt = await asyncio.to_thread(
+            fail_dial, req.call_id, error, self.settings.dial_max_attempts
+        )
+        if outcome == "retry":
+            await self.q.delay(req.call_id, min(300.0, self.retry_base_s * 2 ** (attempt - 1)))
+        else:
+            await self.q.dead_letter(req.call_id, error)
 
     async def _handle(self, msg_id: str, call_id: str) -> None:
         try:
@@ -305,6 +338,13 @@ class Worker:
             if lost:
                 log.warning("re-enqueueing %d orphaned calls", len(lost))
                 await self.q.enqueue(lost)
+
+        # A lease whose call has already ended (e.g. a hang-up webhook was lost) is dead weight.
+        held = await self.r.zrange(keys.GLOBAL_CHANNELS, 0, -1)
+        if held:
+            for call_id, campaign_id in await asyncio.to_thread(ended_leases, held):
+                log.warning("releasing stale channel lease for ended call %s", call_id)
+                await self.channels.release(call_id, campaign_id)
 
         def reap():
             with SessionLocal() as db:

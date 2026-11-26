@@ -25,5 +25,62 @@ services:
       interval: 3s
       timeout: 3s
       retries: 20
+
+  # ---- LiveKit stack: `pnpm infra:livekit` (profile "livekit") ----
+  livekit-redis:
+    image: redis:7
+    profiles: [livekit]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  livekit:
+    image: livekit/livekit-server:latest
+    profiles: [livekit]
+    command: ["--config", "/etc/livekit.yaml"]
+    volumes:
+      - ./livekit/livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      livekit-redis:
+        condition: service_healthy
+  sip:
+    image: livekit/sip:latest
+    profiles: [livekit]
+    volumes:
+      - ./livekit/sip.yaml:/sip/config.yaml:ro
+    ports:
+      - "5060:5060/udp"
+    depends_on:
+      - livekit
+  agent:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.agent
+    profiles: [livekit]
+    environment:
+      LIVEKIT_URL: ws://livekit:7880
+      LIVEKIT_API_KEY: devkey
+      LIVEKIT_API_SECRET: devsecret-devsecret-devsecret-devsecret
+      AGENT_API_URL: http://host.docker.internal:8000/api
+      AGENT_SHARED_SECRET: ${AGENT_SHARED_SECRET:-dev-agent-secret-change-me}
+      AGENT_STUB_SECONDS: ${AGENT_STUB_SECONDS:-5}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - livekit
+
+  # ---- fake phone network for testing: answers every call (profile "livekit-test") ----
+  sipp:
+    image: ctaloi/sipp:latest
+    profiles: [livekit-test]
+    command: ["sipp", "-sn", "uas", "-p", "5070", "-mp", "6000", "-rtp_echo", "-nostdin", "-aa"]
+
 volumes:
   pgdata:

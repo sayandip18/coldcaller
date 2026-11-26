@@ -20,7 +20,7 @@ TERMINAL = {"completed", "no_answer", "busy", "failed", "skipped_dnc"}
 
 
 def fast_dialer(**kw):
-    def factory(release):
+    def factory(release, on_error=None):
         opts = {"ring_s": (0.05, 0.1), "talk_s": (0.2, 0.4), "seed": 1} | kw
         return FakeDialer(release, **opts)
 

@@ -1,0 +1,17 @@
+# Dev-only LiveKit server config. Replace the key/secret before exposing this anywhere.
+port: 7880
+log_level: info
+rtc:
+  tcp_port: 7881
+  udp_port: 7882        # single UDP port (mux) so Docker only publishes one port
+  use_external_ip: false
+redis:
+  address: livekit-redis:6379
+keys:
+  devkey: devsecret-devsecret-devsecret-devsecret
+room:
+  departure_timeout: 5  # close an empty room quickly so hang-ups are seen fast
+webhook:
+  api_key: devkey
+  urls:
+    - http://host.docker.internal:8000/api/livekit/webhook

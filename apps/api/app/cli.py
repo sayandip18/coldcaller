@@ -7,6 +7,7 @@ Existing users are left untouched unless --reset-password is passed.
 """
 
 import argparse
+import asyncio
 import secrets
 import sys
 
@@ -48,6 +49,33 @@ def create_admin(email: str, password: str | None, name: str, reset: bool) -> in
     return 0
 
 
+def livekit_trunk(args: argparse.Namespace) -> int:
+    """Create (or list) the LiveKit SIP outbound trunk the worker dials through."""
+    from app.livekit_client import LiveKitClient
+
+    async def run() -> int:
+        client = LiveKitClient()
+        try:
+            if args.action == "list":
+                for trunk_id, name, address in await client.list_outbound_trunks():
+                    print(f"{trunk_id}  {name}  {address}")
+                return 0
+            trunk_id = await client.create_outbound_trunk(
+                name=args.name,
+                address=args.address,
+                numbers=args.number,
+                username=args.username or "",
+                password=args.password or "",
+            )
+            print(f"Created outbound trunk: {trunk_id}")
+            print(f"Set LIVEKIT_SIP_TRUNK_ID={trunk_id} and DIALER=livekit in apps/api/.env")
+            return 0
+        finally:
+            await client.aclose()
+
+    return asyncio.run(run())
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="app.cli")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -56,7 +84,18 @@ def main() -> int:
     p.add_argument("--password")
     p.add_argument("--name", default="Admin")
     p.add_argument("--reset-password", action="store_true")
+    t = sub.add_parser("livekit-trunk", help="manage the LiveKit SIP outbound trunk")
+    t.add_argument("action", choices=["create", "list"])
+    t.add_argument("--name", default="coldcaller-outbound")
+    t.add_argument("--address", help="carrier / SIP bridge host[:port], e.g. asterisk.internal:5060")
+    t.add_argument("--number", action="append", default=[], help="caller-ID number(s); repeatable")
+    t.add_argument("--username")
+    t.add_argument("--password")
     args = parser.parse_args()
+    if args.cmd == "livekit-trunk":
+        if args.action == "create" and (not args.address or not args.number):
+            parser.error("create needs --address and at least one --number")
+        return livekit_trunk(args)
     return create_admin(args.email, args.password, args.name, args.reset_password)
 
 

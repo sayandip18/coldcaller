@@ -125,7 +125,7 @@ Data fetching: TanStack Query with 2 to 5 second polling, protected routes using
 
 1. **Foundation**: compose infra, config, models and migrations, **auth and user accounts**, call/campaign CRUD with CSV upload, UI shell with login. Demo: sign in, create a campaign, see `queued` rows.
 2. **Queue and worker**: Redis streams, CPS and channel Lua, worker with a **fake dialer**, finalizer, calling-window and DNC gates. Demo: 50 calls respect CPS and concurrency.
-3. **LiveKit integration**: livekit-server and livekit-sip in compose, real `CreateSIPParticipant`, webhook handler, agent dispatch. Demo: call to a SIP softphone or test trunk.
+3. **LiveKit integration** (done): livekit-server, livekit-sip and a sipp fake carrier in compose, real `CreateSIPParticipant` (waits for answer), webhook handler, explicit agent dispatch, a stub agent, and the agent callback endpoints (`GET/PATCH /api/agent/calls/{id}`, pulled forward from Phase 4). Demo: a campaign dialled through LiveKit SIP to a fake phone network, ending in a recorded outcome.
 4. **Voice agent**: full pipeline, per-contact prompt rendering, outcome tool and callback, voicemail detection, guardrails. Demo: end-to-end call with outcome and transcript in the UI.
 5. **Hardening**: webhook retries, NCPR provider, SNS sink, rate limiting on auth endpoints, DLQ replay tooling, and **per-campaign queues** (see below). Dial retries, the DLQ, the lease reaper and the stuck-call reaper were already built in Phase 2.
 

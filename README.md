@@ -37,3 +37,25 @@ Limits come from the campaign (`max_concurrency`, `cps`) and from `CARRIER_CPS` 
 
 Redis is published on host port **6380** (not 6379) because WSL setups often already have
 a Redis on 6379 that shadows the container.
+
+## Real calls with LiveKit (Phase 3)
+
+```bash
+pnpm infra:livekit        # LiveKit server, SIP gateway, voice agent, and a fake "phone network"
+pnpm livekit-trunk create --address sipp:5070 --number +911140000000
+# put DIALER=livekit and LIVEKIT_SIP_TRUNK_ID=<printed id> in apps/api/.env, then:
+pnpm dev
+```
+
+Flow: the worker asks LiveKit to dial through the SIP trunk and waits for the callee to
+answer. On answer it marks the call `answered` and dispatches the agent into the room
+(`call-<id>`). The agent reports an outcome to `PATCH /api/agent/calls/{id}/outcome`. LiveKit
+webhooks (`/api/livekit/webhook`) mark the agent joining and the room finishing, and free the
+call's concurrency slot. The `sipp` container answers every call, so no real carrier is needed.
+
+* The agent in this phase is a **stub** (joins, waits a few seconds, reports an outcome, hangs up).
+  The real STT/LLM/TTS conversation is Phase 4.
+* The agent runs in a container because LiveKit media (WebRTC) stays inside the Docker network.
+* To use a real carrier or Asterisk bridge, create a trunk with its address and credentials instead.
+* `AGENT_SHARED_SECRET` and the LiveKit key/secret in `infra/` are dev defaults. Change them
+  before exposing anything.

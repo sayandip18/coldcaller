@@ -8,11 +8,13 @@
     "install:all": "pnpm install && pnpm --dir apps/web install && uv sync --directory apps/api",
     "lint": "uv run --directory apps/api ruff check . && pnpm --dir apps/web exec tsc --noEmit && pnpm --dir apps/web lint",
     "infra:up": "docker compose -f infra/docker-compose.yml up -d --wait",
-    "infra:down": "docker compose -f infra/docker-compose.yml down",
+    "infra:down": "docker compose -f infra/docker-compose.yml --profile livekit --profile livekit-test down",
     "db:migrate": "uv run --directory apps/api alembic upgrade head",
     "create-admin": "uv run --directory apps/api python -m app.cli create-admin",
     "test:api": "uv run --directory apps/api pytest -q",
-    "dev:worker": "uv run --directory apps/api python -m app.worker.main"
+    "dev:worker": "uv run --directory apps/api python -m app.worker.main",
+    "infra:livekit": "docker compose -f infra/docker-compose.yml --profile livekit --profile livekit-test up -d --build",
+    "livekit-trunk": "uv run --directory apps/api python -m app.cli livekit-trunk"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

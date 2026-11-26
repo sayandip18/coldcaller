@@ -1,16 +1,22 @@
 import asyncio
+import json
 import logging
 import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+from livekit import api as lk_api
+
 from app.db.models import CallStatus, utcnow
 from app.db.session import SessionLocal
+from app.livekit_client import LiveKitClient, classify_twirp_error
 from app.services.lifecycle import ACTIVE, mark
 
 log = logging.getLogger(__name__)
 
 ReleaseFn = Callable[[str, str | None], Awaitable[None]]
+# Called when a dial attempt failed for infrastructure reasons and should be retried.
+ErrorFn = Callable[["DialRequest", str], Awaitable[None]]
 
 
 @dataclass
@@ -39,6 +45,7 @@ class FakeDialer(Dialer):
     def __init__(
         self,
         release: ReleaseFn,
+        on_error: ErrorFn | None = None,
         *,
         ring_s: tuple[float, float] = (1.0, 3.0),
         talk_s: tuple[float, float] = (3.0, 10.0),
@@ -104,3 +111,110 @@ class FakeDialer(Dialer):
         for t in list(self._tasks):
             t.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
+
+
+class LiveKitDialer(Dialer):
+    """Places real calls through LiveKit SIP.
+
+    `dial()` returns immediately; a background task waits for the callee to answer (LiveKit
+    blocks the CreateSIPParticipant request until then), marks the call answered and
+    dispatches the voice agent into the room. The channel lease stays held for the whole
+    conversation and is released by the LiveKit `room_finished` webhook (or, if a webhook is
+    lost, by the worker's lease reconciliation).
+    """
+
+    def __init__(
+        self,
+        release: ReleaseFn,
+        on_error: ErrorFn,
+        client: LiveKitClient,
+        *,
+        trunk_id: str,
+        agent_name: str,
+        ring_timeout_s: int,
+        max_call_s: int,
+    ):
+        self.release, self.on_error, self.client = release, on_error, client
+        self.trunk_id, self.agent_name = trunk_id, agent_name
+        self.ring_timeout_s, self.max_call_s = ring_timeout_s, max_call_s
+        self._tasks: dict[asyncio.Task, DialRequest] = {}
+
+    async def dial(self, req: DialRequest) -> None:
+        task = asyncio.create_task(self._run(req))
+        self._tasks[task] = req
+        task.add_done_callback(lambda t: self._tasks.pop(t, None))
+
+    async def _run(self, req: DialRequest) -> None:
+        try:
+            await self.client.dial(
+                trunk_id=self.trunk_id,
+                to_number=req.to_number,
+                from_number=req.caller_id,
+                room=req.room,
+                identity=f"sip-{req.call_id}",
+                attributes={"call_id": req.call_id},
+                ring_timeout_s=self.ring_timeout_s,
+                max_call_s=self.max_call_s,
+            )
+        except asyncio.CancelledError:
+            raise
+        except lk_api.TwirpError as exc:
+            failure = classify_twirp_error(exc)
+            if failure is None:
+                log.warning("LiveKit error dialing %s: %s", req.call_id, exc.message)
+                await self.on_error(req, f"livekit: {exc.message}")
+                return
+            await self._finish(req, CallStatus(failure.kind), failure.reason)
+            return
+        except Exception as exc:  # noqa: BLE001 - network/auth problems are retried
+            log.warning("could not reach LiveKit to dial %s: %s", req.call_id, exc)
+            await self.on_error(req, f"livekit unreachable: {exc}")
+            return
+
+        # The callee answered.
+        if not await self._step(req, ACTIVE, CallStatus.answered, answered_at=utcnow()):
+            # The call was failed/reaped while ringing; don't leave a live call behind.
+            await self._hang_up(req)
+            return
+        try:
+            await self.client.dispatch_agent(
+                req.room, self.agent_name, json.dumps({"call_id": req.call_id})
+            )
+        except Exception as exc:
+            log.exception("agent dispatch failed for %s", req.call_id)
+            await self._hang_up(req)
+            await self._finish(req, CallStatus.failed, f"agent dispatch failed: {exc}")
+
+    async def _finish(self, req: DialRequest, status: CallStatus, reason: str) -> None:
+        await self._step(
+            req,
+            ACTIVE,
+            status,
+            event=status.value,
+            payload={"reason": reason},
+            failure_reason=reason[:255],
+        )
+        await self.release(req.call_id, req.campaign_id)
+
+    async def _hang_up(self, req: DialRequest) -> None:
+        try:
+            await self.client.delete_room(req.room)
+        except Exception:  # noqa: BLE001
+            log.warning("could not delete room %s", req.room)
+
+    async def _step(self, req: DialRequest, from_statuses, to: CallStatus, **fields) -> bool:
+        def run() -> bool:
+            with SessionLocal() as db:
+                return mark(db, req.call_id, from_statuses, to, **fields)
+
+        return await asyncio.to_thread(run)
+
+    async def aclose(self) -> None:
+        # Worker shutting down: calls still ringing are abandoned, so hang them up.
+        pending = dict(self._tasks)
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        for req in pending.values():
+            await self._hang_up(req)
+        await self.client.aclose()

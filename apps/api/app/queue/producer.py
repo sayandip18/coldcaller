@@ -29,3 +29,16 @@ def enqueue_calls(call_ids: list[str]) -> None:
         pipe.execute()
     except redis.RedisError:
         log.exception("enqueue failed for %d calls; sweeper will recover them", len(call_ids))
+
+
+def release_channels(call_id: str, campaign_id: str | None) -> None:
+    """Free a call's concurrency slots (used by the API process on hang-up webhooks)."""
+    try:
+        pipe = _client().pipeline()
+        pipe.zrem(keys.GLOBAL_CHANNELS, call_id)
+        if campaign_id:
+            pipe.zrem(keys.campaign_channels(campaign_id), call_id)
+        pipe.execute()
+    except redis.RedisError:
+        # The worker's lease reconciliation (and lease expiry) will free it.
+        log.exception("could not release channels for %s", call_id)
